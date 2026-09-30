@@ -1,0 +1,78 @@
+EMPLOYEE PERFORMANCE MANAGEMENT SYSTEM - FIXED VERSION
+
+What is included
+-----------------
+1. Login page now has 3 position boxes:
+   - Employee
+   - Chief Manager
+   - Senior Authority
+   Clicking a box opens email/password fields for that position.
+   The backend also checks that the selected position matches the user's database role.
+
+2. Employee My Work now shows:
+   - all assigned tasks
+   - current and previous task submissions
+   - independent employee-work submissions
+   - status and credits
+   - Excel download
+   - Add My Work button for independent submissions
+
+3. Chief Manager:
+   - sees complete employee-submitted work, not only the title
+   - can view the full description
+   - can approve/reject employee-work submissions
+   - approved independent work receives 0-5 credits automatically
+   - review notes, reviewer and review time are stored
+   - can download submitted work as real .xlsx files
+
+4. Senior Authority:
+   - has Employee Work section
+   - can view complete employee submissions
+   - can download real .xlsx files
+   - retains the existing Appeals section
+
+5. Excel download was rebuilt.
+   Downloads are genuine Office Open XML .xlsx packages, not HTML renamed to .xlsx.
+
+IMPORTANT SETUP
+---------------
+A. Keep your existing backend/.env file from your current project.
+   This ZIP intentionally does NOT include database passwords/secrets.
+
+B. If you do not have backend/.env, copy backend/.env.example to backend/.env
+   and enter your MySQL credentials and JWT secret.
+
+C. Install backend packages:
+   cd backend
+   npm install
+
+D. Install frontend packages:
+   cd frontend
+   npm install
+
+E. Start backend:
+   cd backend
+   node server.js
+
+F. Start frontend in another terminal:
+   cd frontend
+   npm run dev
+
+DATABASE
+--------
+The backend automatically creates/checks the employee_work table and the
+required credits/review columns at startup. It also checks the task work
+submission columns.
+
+Existing employee_work rows are preserved.
+
+LOGIN
+-----
+The selected login box must match the user's role in the users table.
+Database roles are:
+   employee -> Employee
+   manager  -> Chief Manager
+   sm       -> Senior Authority
+
+Do not run createTestUsers.js if those users already exist, because it inserts
+new rows.
