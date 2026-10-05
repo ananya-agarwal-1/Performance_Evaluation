@@ -256,6 +256,9 @@ async function ensureTaskColumns() {
 }
 
 async function ensureWorkflowSchema() {
+  await pool.query(`ALTER TABLE users MODIFY role
+    ENUM('manager','sm','employee','performance_officer','board_member','admin') NOT NULL`);
+
   await pool.query(`ALTER TABLE tasks MODIFY status
     ENUM('assigned','in_progress','submitted','completed','approved','rejected')
     NOT NULL DEFAULT 'assigned'`);

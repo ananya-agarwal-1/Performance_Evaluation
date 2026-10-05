@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, escapeHTML, setMessage } from './api.js'
+import { apiGet, apiPatch, apiPost, downloadFile, escapeHTML, setMessage } from './api.js'
 import { requireRole, setIdentity } from './auth.js'
 
 const manager = await requireRole(['manager'])
@@ -103,6 +103,8 @@ document.querySelector('#assignment-form').addEventListener('submit', async (eve
 function openTaskReview(taskId) {
     selectedTask = pendingTasks.find((task) => Number(task.id) === taskId)
     if (!selectedTask) return
+    const hasSubmission = Boolean(selectedTask.submission_id || selectedTask.submission_description ||
+        selectedTask.submitted_work_title || selectedTask.submitted_work_description || selectedTask.submitted_work)
     document.querySelector('#task-review-title').textContent = `Review: ${selectedTask.title}`
     document.querySelector('#task-review-info').innerHTML = `
         <dt>Employee</dt><dd>${escapeHTML(selectedTask.employee_name || selectedTask.employee_id)}</dd>
@@ -110,13 +112,29 @@ function openTaskReview(taskId) {
         <dt>Submission</dt><dd>${escapeHTML(selectedTask.submission_description || selectedTask.submitted_work_description || selectedTask.submitted_work || '-')}</dd>
         <dt>Submitted At</dt><dd>${escapeHTML(formatDate(selectedTask.submitted_at || selectedTask.work_submitted_at))}</dd>
         <dt>Deadline</dt><dd>${escapeHTML(formatDate(selectedTask.due_date))}</dd><dt>Priority</dt><dd>${escapeHTML(selectedTask.priority || 'medium')}</dd>`
+    document.querySelector('#missing-submission-warning').hidden = hasSubmission
+    document.querySelector('#download-task-work').hidden = !hasSubmission
+    document.querySelector('#task-review-form').hidden = !hasSubmission
     document.querySelector('#task-review-detail').hidden = false
     document.querySelector('#task-review-message').textContent = ''
     location.hash = 'task-reviews'
 }
 
+document.querySelector('#download-task-work').addEventListener('click', async () => {
+    if (!selectedTask) return
+    try {
+        await downloadFile(`/tasks/${selectedTask.id}/work/download`, `work_${selectedTask.id}.xlsx`)
+        setMessage(document.querySelector('#task-review-message'), 'Excel file downloaded.', 'success')
+    } catch (error) {
+        setMessage(document.querySelector('#task-review-message'), error.message)
+    }
+})
+
 async function decideTask(decision) {
     if (!selectedTask) return
+    if (!selectedTask.submission_id && !selectedTask.submission_description && !selectedTask.submitted_work_title && !selectedTask.submitted_work_description && !selectedTask.submitted_work) {
+        return setMessage(document.querySelector('#task-review-message'), 'This task has no stored submission content and cannot be reviewed.')
+    }
     const comment = document.querySelector('#task-review-comment').value.trim()
     if (decision === 'rejected' && !comment) return setMessage(document.querySelector('#task-review-message'), 'A rejection comment is required.')
     try {

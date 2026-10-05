@@ -50,3 +50,26 @@ export const apiGet = (path) => apiRequest(path)
 export const apiPost = (path, body) => apiRequest(path, { method: 'POST', body })
 export const apiPut = (path, body) => apiRequest(path, { method: 'PUT', body })
 export const apiPatch = (path, body) => apiRequest(path, { method: 'PATCH', body })
+
+export async function downloadFile(path, filename) {
+    let response
+    try {
+        response = await fetch(`${API_URL}${path}`, {
+            headers: { Authorization: `Bearer ${getToken()}` }
+        })
+    } catch {
+        throw new Error('Cannot reach the EPMS backend at localhost:3000.')
+    }
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || `Download failed (${response.status})`)
+    }
+    const url = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}

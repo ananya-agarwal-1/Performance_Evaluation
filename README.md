@@ -27,6 +27,7 @@ The backend upgrades the legacy schema additively at startup. `completed` remain
 | `POST /api/tasks/:id/submit` | Employee-only. Body: `{ "submission_description", "submission_link?" }`; returns task ID, `submitted` status, and the saved submission ID. Each resubmission adds history to the same task. |
 | `GET /team-tasks/pending-review` | Manager-only. Returns only that manager's `submitted` tasks, including employee identity, latest submission content/link, priority, and deadline. |
 | `POST /api/tasks/:id/review` | Manager-only. Body: `{ "decision": "approved", "credit_rating": 1..5, "comment?" }` or `{ "decision": "rejected", "comment": "required" }`. The backend validates ownership, status, and transition; approval, credit-ledger entry, performance update, notification, and audit records commit together. |
+| `GET /tasks/:id/work/download` | Employee or assigning manager; downloads an XLSX task report when saved submission content exists. The Employee My Work table and Manager Task Review details show **Download Excel** for valid submissions. |
 | `GET /api/credits/my` | Employee-only. Returns ledger-derived `balance` and recent credit `transactions`; there is no frontend-writable balance field. |
 | `GET /api/notifications/my` | Returns notifications for the authenticated user. `PATCH /api/notifications/:id/read` marks only that user's notification read. |
 
@@ -47,6 +48,8 @@ The review upgrade creates `self_evaluations`, `manager_reviews`, and a singleto
 | `POST /api/appeals` | Employee-only; accepts `monthly_performance_id`, `reason`, and optional `evidence`. The backend sets `current_level` to `manager`, blocks duplicates, and notifies/audits the event. |
 
 The additive startup migration updates a single-row `performance_weights` configuration idempotently; it does not create duplicate weight records. The appeals table gains `evidence` and `current_level` columns. Senior-authority review rejects appeals that have not reached its level. Full manager-to-officer-to-senior-to-board escalation is not implemented yet.
+
+The login page includes Employee, Manager, Performance Officer, Senior Authority, Appeal Board, and Admin/HR role choices. Backend authentication still requires a matching user account with that database role; the application does not seed demo Officer, Board, or Admin accounts.
 
 ## Vanilla Frontend
 

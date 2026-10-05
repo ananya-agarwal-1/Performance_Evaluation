@@ -1,4 +1,4 @@
-import { apiGet, apiPatch, apiPost, apiPut, escapeHTML, getUser, setMessage } from './api.js'
+import { apiGet, apiPatch, apiPost, apiPut, downloadFile, escapeHTML, getUser, setMessage } from './api.js'
 import { requireRole, setIdentity } from './auth.js'
 
 const user = await requireRole(['employee'])
@@ -79,13 +79,30 @@ function renderTasks(tasks) {
         } else if (button.dataset.taskAction === 'submit') {
             taskSelect.value = String(task.id)
             document.querySelector('#submission-description').focus()
+        } else if (button.dataset.taskAction === 'download') {
+            try {
+                setMessage(document.querySelector('#task-message'), 'Preparing Excel download…', 'info')
+                await downloadFile(`/tasks/${task.id}/work/download`, `work_${task.id}.xlsx`)
+                setMessage(document.querySelector('#task-message'), 'Excel file downloaded.', 'success')
+            } catch (error) {
+                setMessage(document.querySelector('#task-message'), error.message)
+            }
         } else {
             const detail = document.querySelector('#task-details')
             const history = task.submissions || []
             detail.innerHTML = `<h3>${escapeHTML(task.title)}</h3><p>${escapeHTML(task.description || 'No description')}</p>
                 <p>Assigned by ${escapeHTML(task.assigned_by_name || task.assigned_by)} | ${escapeHTML(task.priority || 'medium')} | Deadline ${escapeHTML(formatDate(task.due_date))}</p>
+                ${history.length || task.submitted_work ? `<button type="button" data-download-task-detail="${Number(task.id)}">Download Excel</button>` : ''}
                 <h4>Submission History</h4>${history.length ? `<ol>${history.map((entry) => `<li><strong>${escapeHTML(entry.status)}</strong> ${escapeHTML(formatDate(entry.submitted_at, true))}${entry.work_date ? `<p>Date completed: ${escapeHTML(formatDate(entry.work_date))}</p>` : ''}<p>${escapeHTML(entry.submission_description)}</p>${entry.review_comment ? `<p>Manager comment: ${escapeHTML(entry.review_comment)}</p>` : ''}${entry.submission_link ? `<a href="${escapeHTML(entry.submission_link)}" target="_blank" rel="noreferrer">Open work link</a>` : ''}</li>`).join('')}</ol>` : '<p>No submissions yet.</p>'}`
             detail.hidden = false
+            detail.querySelector('[data-download-task-detail]')?.addEventListener('click', async () => {
+                try {
+                    await downloadFile(`/tasks/${task.id}/work/download`, `work_${task.id}.xlsx`)
+                    setMessage(document.querySelector('#task-message'), 'Excel file downloaded.', 'success')
+                } catch (error) {
+                    setMessage(document.querySelector('#task-message'), error.message)
+                }
+            })
         }
     }))
 }
@@ -93,8 +110,17 @@ function renderTasks(tasks) {
 function taskAction(task) {
     if (task.status === 'assigned') return `<button type="button" data-task-action="start" data-task-id="${Number(task.id)}">Start Task</button>`
     if (task.status === 'in_progress') return `<button type="button" data-task-action="submit" data-task-id="${Number(task.id)}">Submit Work</button>`
-    if (task.status === 'rejected') return `<button type="button" data-task-action="revise" data-task-id="${Number(task.id)}">Revise &amp; Resubmit</button>`
-    if (task.status === 'submitted') return 'Awaiting Review'
+    if (task.status === 'rejected') {
+        const download = task.submitted_work || task.submissions?.length
+            ? ` <button type="button" data-task-action="download" data-task-id="${Number(task.id)}">Download Excel</button>`
+            : ''
+        return `<button type="button" data-task-action="revise" data-task-id="${Number(task.id)}">Revise &amp; Resubmit</button>${download}`
+    }
+    if (['submitted', 'approved'].includes(task.status)) {
+        const status = task.status === 'submitted' ? 'Awaiting Review' : 'Approved'
+        const hasSubmission = Boolean(task.submitted_work || task.submissions?.length)
+        return `${status}${hasSubmission ? ` <button type="button" data-task-action="download" data-task-id="${Number(task.id)}">Download Excel</button>` : ''}`
+    }
     return 'Approved'
 }
 

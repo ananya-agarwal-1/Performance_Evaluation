@@ -56,7 +56,9 @@
         <div id="task-review-detail" hidden>
             <h3 id="task-review-title">Review Submission</h3>
             <dl id="task-review-info" class="definition-list"></dl>
-            <form id="task-review-form">
+            <p id="missing-submission-warning" class="notice" hidden>No submission content is stored for this task, so it cannot be downloaded or reviewed.</p>
+            <button type="button" id="download-task-work" class="secondary" hidden>Download Excel</button>
+            <form id="task-review-form" hidden>
                 <label for="review-credit-rating">Credit Rating (1–5)</label><select id="review-credit-rating" name="credit_rating"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4" selected>4</option><option value="5">5</option></select>
                 <label for="task-review-comment">Manager Comment (required for rejection)</label><textarea id="task-review-comment" name="comment"></textarea>
                 <div class="form-actions"><button type="button" id="approve-task">Approve</button><button type="button" id="reject-task" class="danger">Reject</button></div>
