@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Manager | EPMS</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+<header>
+    <h1>Employee Performance Management System</h1>
+    <p>Manager Dashboard | Logged in as <strong data-user-name></strong></p>
+</header>
+<nav aria-label="Manager navigation">
+    <a href="#home">Home</a><a href="#team">My Team</a><a href="#assign">Assign Work</a>
+    <a href="#task-reviews">Task Reviews</a><a href="#reviews">Performance Reviews</a>
+    <a href="#notifications">Notifications</a><a href="#profile">Profile</a><button type="button" data-logout>Logout</button>
+</nav>
+<main>
+    <p id="page-message" class="message" role="status" aria-live="polite"></p>
+    <section id="home">
+        <h2>Manager Dashboard</h2>
+        <div class="summary-table">
+            <div><span>Team Members</span><strong id="team-count">0</strong></div>
+            <div><span>Pending Task Reviews</span><strong id="task-review-count">0</strong></div>
+            <div><span>Pending Self Evaluations</span><strong id="evaluation-count">0</strong></div>
+        </div>
+        <h3>Team Members</h3>
+        <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Current Performance</th><th>Task Score</th><th>KPI Score</th><th>Self Evaluation</th><th>Review</th></tr></thead><tbody id="team-list"></tbody></table></div>
+    </section>
+
+    <section id="team">
+        <h2>My Team</h2>
+        <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Performance</th><th>Self Evaluation</th><th>Review Status</th><th>Action</th></tr></thead><tbody id="team-actions"></tbody></table></div>
+    </section>
+
+    <section id="assign">
+        <h2>Assign Work</h2>
+        <form id="assignment-form">
+            <label for="employee-id">Employee</label><select id="employee-id" name="employee_id" required></select>
+            <label for="task-title">Task Title</label><input id="task-title" name="title" required>
+            <label for="task-description">Description</label><textarea id="task-description" name="description" required></textarea>
+            <div class="form-row">
+                <div><label for="task-priority">Priority</label><select id="task-priority" name="priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="critical">Critical</option></select></div>
+                <div><label for="task-deadline">Deadline</label><input id="task-deadline" name="due_date" type="date" required></div>
+            </div>
+            <div class="form-actions"><button type="submit">Assign Task</button></div>
+        </form>
+        <p id="assignment-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="task-reviews">
+        <h2>Task Submissions</h2>
+        <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Task</th><th>Submission</th><th>Submitted</th><th>Deadline</th><th>Priority</th><th>Action</th></tr></thead><tbody id="pending-task-list"></tbody></table></div>
+        <div id="task-review-detail" hidden>
+            <h3 id="task-review-title">Review Submission</h3>
+            <dl id="task-review-info" class="definition-list"></dl>
+            <form id="task-review-form">
+                <label for="review-credit-rating">Credit Rating (1–5)</label><select id="review-credit-rating" name="credit_rating"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4" selected>4</option><option value="5">5</option></select>
+                <label for="task-review-comment">Manager Comment (required for rejection)</label><textarea id="task-review-comment" name="comment"></textarea>
+                <div class="form-actions"><button type="button" id="approve-task">Approve</button><button type="button" id="reject-task" class="danger">Reject</button></div>
+            </form>
+        </div>
+        <p id="task-review-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="reviews">
+        <h2>Manager Performance Reviews</h2>
+        <p>Open employees with a submitted self evaluation. Ratings and official scores are saved by the backend.</p>
+        <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Current Performance</th><th>Task Score</th><th>KPI Score</th><th>Self Evaluation</th><th>Review Status</th><th>Action</th></tr></thead><tbody id="review-team-list"></tbody></table></div>
+        <div id="performance-review-detail" hidden>
+            <h3 id="performance-review-title">Employee Review</h3>
+            <div id="employee-review-summary"></div>
+            <h3>Self Evaluation</h3><dl id="self-evaluation-detail" class="definition-list"></dl>
+            <h3>Historical Performance</h3><div class="table-wrap"><table><thead><tr><th>Month</th><th>Tasks Completed</th><th>Manager Rating</th><th>Score</th><th>Classification</th></tr></thead><tbody id="manager-performance-history"></tbody></table></div>
+            <h3>Previous Reviews</h3><div class="table-wrap"><table><thead><tr><th>Period</th><th>Rating</th><th>Strengths</th><th>Improvement Areas</th><th>Comments</th></tr></thead><tbody id="previous-reviews"></tbody></table></div>
+            <form id="manager-review-form">
+                <input type="hidden" name="employee_id" id="review-employee-id">
+                <label for="manager-rating">Manager Rating (0–100)</label><input id="manager-rating" name="manager_rating" type="number" min="0" max="100" required>
+                <label for="review-strengths">Strengths</label><textarea id="review-strengths" name="strengths"></textarea>
+                <label for="improvement-areas">Areas for Improvement</label><textarea id="improvement-areas" name="improvement_areas"></textarea>
+                <label for="recommendations">Recommendations</label><textarea id="recommendations" name="recommendations"></textarea>
+                <label for="manager-comments">Comments</label><textarea id="manager-comments" name="comments"></textarea>
+                <div class="form-actions"><button type="submit">Submit Manager Review</button><button id="close-review" class="secondary" type="button">Close</button></div>
+            </form>
+        </div>
+        <p id="manager-review-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="notifications">
+        <h2>Notifications</h2>
+        <div class="table-wrap"><table><thead><tr><th>Notification</th><th>Details</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody id="notification-list"></tbody></table></div>
+    </section>
+
+    <section id="profile">
+        <h2>Profile</h2><dl class="definition-list"><dt>Name</dt><dd data-user-name></dd><dt>Employee ID</dt><dd id="profile-id"></dd><dt>Email</dt><dd id="profile-email"></dd></dl>
+    </section>
+</main>
+<footer>Employee Performance Management System</footer>
+<script type="module" src="js/manager.js"></script>
+</body>
+</html>

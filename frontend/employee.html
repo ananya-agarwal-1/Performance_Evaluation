@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Employee | EPMS</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+<header>
+    <h1>Employee Performance Management System</h1>
+    <p>Logged in as <strong data-user-name></strong> (<span data-user-role></span>)</p>
+</header>
+<nav aria-label="Employee navigation">
+    <a href="#home">Home</a><a href="#tasks">My Work</a><a href="#performance">Performance</a>
+    <a href="#evaluation">Self Evaluation</a><a href="#feedback">Feedback</a><a href="#appeals">Appeals</a>
+    <a href="#notifications">Notifications</a><a href="#profile">Profile</a><button type="button" data-logout>Logout</button>
+</nav>
+<main>
+    <p id="page-message" class="message" role="status" aria-live="polite"></p>
+    <section id="home">
+        <h2>Employee Dashboard</h2>
+        <p>Welcome, <strong data-user-name></strong>.</p>
+        <div class="summary-table">
+            <div><span>Overall Performance</span><strong id="summary-score">Not reviewed</strong></div>
+            <div><span>Tasks Completed</span><strong id="summary-completed">0</strong></div>
+            <div><span>Pending Tasks</span><strong id="summary-pending">0</strong></div>
+            <div><span>Credits</span><strong id="summary-credits">0.00</strong></div>
+        </div>
+        <h3>Recent Tasks</h3>
+        <div class="table-wrap"><table><thead><tr><th>Task</th><th>Priority</th><th>Deadline</th><th>Status</th><th>Action</th></tr></thead><tbody id="recent-tasks"></tbody></table></div>
+    </section>
+
+    <section id="tasks">
+        <h2>My Work</h2>
+        <p>Tasks assigned to your account.</p>
+        <div class="table-wrap"><table><thead><tr><th>Task</th><th>Description</th><th>Assigned By</th><th>Priority</th><th>Deadline</th><th>Status</th><th>Action</th></tr></thead><tbody id="task-list"></tbody></table></div>
+        <h3>Add My Work / Submit Work</h3>
+        <form id="task-submission-form">
+            <label for="submission-task">Task</label><select id="submission-task" name="task_id" required></select>
+            <label for="submission-description">Work Description</label><textarea id="submission-description" name="submission_description" required></textarea>
+            <label for="submission-link">Work Link (optional)</label><input id="submission-link" name="submission_link" type="url" placeholder="https://">
+            <label for="submission-date">Date Completed</label><input id="submission-date" name="work_date" type="date">
+            <div class="form-actions"><button type="submit">Submit Work</button></div>
+        </form>
+        <p id="task-message" class="message" role="status" aria-live="polite"></p>
+        <div id="task-details" hidden></div>
+    </section>
+
+    <section id="performance">
+        <h2>Performance Summary</h2>
+        <div id="performance-summary"><p>Performance data is loaded from the backend.</p></div>
+        <h3>Performance History</h3>
+        <div class="table-wrap"><table><thead><tr><th>Month</th><th>Completed Tasks</th><th>Manager Rating</th><th>Overall Score</th><th>Classification</th></tr></thead><tbody id="performance-history"></tbody></table></div>
+        <h3>Raise Performance Appeal</h3>
+        <form id="appeal-form" hidden>
+            <label for="appeal-reason">Reason</label><textarea id="appeal-reason" name="reason" required></textarea>
+            <label for="appeal-evidence">Evidence / Explanation</label><textarea id="appeal-evidence" name="evidence"></textarea>
+            <div class="form-actions"><button type="submit">Submit Appeal</button></div>
+        </form>
+        <p id="appeal-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="evaluation">
+        <h2>Self Evaluation</h2>
+        <p id="evaluation-status" class="notice">Loading evaluation status…</p>
+        <form id="self-evaluation-form">
+            <label for="achievements">Major Achievements</label><textarea id="achievements" name="major_achievements" required></textarea>
+            <label for="strengths">Strengths</label><textarea id="strengths" name="strengths" required></textarea>
+            <label for="challenges">Challenges</label><textarea id="challenges" name="challenges" required></textarea>
+            <label for="goals">Goals</label><textarea id="goals" name="goals" required></textarea>
+            <label for="kpi-progress">KPI Progress</label><textarea id="kpi-progress" name="kpi_progress" required></textarea>
+            <label for="additional-comments">Additional Comments</label><textarea id="additional-comments" name="additional_comments"></textarea>
+            <div class="form-actions"><button id="save-draft" type="button" class="secondary">Save Draft</button><button id="submit-evaluation" type="submit">Submit Evaluation</button></div>
+        </form>
+        <p id="evaluation-message" class="message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="feedback">
+        <h2>Manager Feedback</h2>
+        <dl id="feedback-details" class="definition-list"><dt>Review</dt><dd>Feedback appears after your manager completes a review.</dd></dl>
+    </section>
+
+    <section id="appeals">
+        <h2>Appeals</h2>
+        <p>Performance appeals enter the manager review level. The authority level is set by the backend.</p>
+        <div class="table-wrap"><table><thead><tr><th>Appeal</th><th>Reason</th><th>Date</th><th>Current Level</th><th>Status</th></tr></thead><tbody id="appeal-list"></tbody></table></div>
+    </section>
+
+    <section id="notifications">
+        <h2>Notifications</h2>
+        <div class="table-wrap"><table><thead><tr><th>Notification</th><th>Details</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody id="notification-list"></tbody></table></div>
+    </section>
+
+    <section id="profile">
+        <h2>Profile</h2>
+        <dl class="definition-list"><dt>Name</dt><dd data-user-name></dd><dt>Employee ID</dt><dd id="profile-id"></dd><dt>Email</dt><dd id="profile-email"></dd><dt>Role</dt><dd data-user-role></dd></dl>
+    </section>
+</main>
+<footer>Employee Performance Management System</footer>
+<script type="module" src="js/employee.js"></script>
+</body>
+</html>

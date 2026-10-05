@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Administration | EPMS</title><link rel="stylesheet" href="css/style.css"></head>
+<body><header><h1>Employee Performance Management System</h1><p>Administration | <strong data-user-name></strong></p></header>
+<nav><a href="#home">Home</a><a href="#users">Recent Users</a><a href="#system">System Summary</a><button type="button" data-logout>Logout</button></nav>
+<main><p id="page-message" class="message" role="status"></p><section id="home"><h2>Admin Dashboard</h2><dl id="admin-stats" class="definition-list"></dl></section>
+<section id="users"><h2>Recently Created Accounts</h2><div class="table-wrap"><table><thead><tr><th>Employee ID</th><th>Name</th><th>Email</th><th>Role</th><th>Created</th></tr></thead><tbody id="recent-users"></tbody></table></div></section>
+<section id="system"><h2>System Summary</h2><p id="system-summary">Loaded from the authenticated admin API.</p></section></main><footer>Employee Performance Management System</footer><script type="module" src="js/admin.js"></script></body></html>

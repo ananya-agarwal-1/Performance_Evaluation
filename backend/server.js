@@ -9,6 +9,13 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const pool = require('./db');
 const { verifyToken, requireRole } = require('./middleware/auth');
+const {
+  DEFAULT_WEIGHTS,
+  getPerformanceClassification,
+  getPerformanceWeights,
+  normalizeKpiScore,
+  recalculatePerformance
+} = require('./services/performanceService');
 
 const app = express();
 app.use(cors());
@@ -16,7 +23,7 @@ app.use(express.json());
 
 const allowedTransitions = {
   assigned: 'in_progress',
-  in_progress: 'completed'
+  rejected: 'in_progress'
 };
 
 function xmlEscape(value) {
@@ -225,13 +232,15 @@ function sendXlsx(res, rows, filename) {
 
 async function ensureTaskColumns() {
   const columns = [
+    ['priority', "ENUM('low','medium','high','critical') NOT NULL DEFAULT 'medium'"],
     ['submitted_work_title', 'VARCHAR(255) NULL'],
     ['submitted_work_description', 'TEXT NULL'],
     ['submitted_work', 'TEXT NULL'],
     ['work_date', 'DATE NULL'],
     ['work_time', 'TIME NULL'],
     ['work_duration', 'VARCHAR(100) NULL'],
-    ['work_submitted_at', 'DATETIME NULL']
+    ['work_submitted_at', 'DATETIME NULL'],
+    ['submission_link', 'VARCHAR(2048) NULL']
   ];
 
   for (const [columnNameValue, definition] of columns) {
@@ -244,6 +253,235 @@ async function ensureTaskColumns() {
       await pool.query(`ALTER TABLE tasks ADD COLUMN ${columnNameValue} ${definition}`);
     }
   }
+}
+
+async function ensureWorkflowSchema() {
+  await pool.query(`ALTER TABLE tasks MODIFY status
+    ENUM('assigned','in_progress','submitted','completed','approved','rejected')
+    NOT NULL DEFAULT 'assigned'`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_submissions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      task_id INT NOT NULL,
+      employee_id VARCHAR(10) NOT NULL,
+      submission_description TEXT NOT NULL,
+      submission_link VARCHAR(2048) NULL,
+      work_title VARCHAR(255) NULL,
+      work_description TEXT NULL,
+      work_details TEXT NULL,
+      work_date DATE NULL,
+      work_time TIME NULL,
+      work_duration VARCHAR(100) NULL,
+      status ENUM('submitted','approved','rejected') NOT NULL DEFAULT 'submitted',
+      review_comment TEXT NULL,
+      reviewed_by VARCHAR(10) NULL,
+      reviewed_at DATETIME NULL,
+      submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT task_submissions_task_fk FOREIGN KEY (task_id) REFERENCES tasks(id),
+      CONSTRAINT task_submissions_employee_fk FOREIGN KEY (employee_id) REFERENCES users(employee_id),
+      INDEX task_submissions_task_idx (task_id, id)
+    ) ENGINE=InnoDB
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      recipient_id VARCHAR(10) NOT NULL,
+      title VARCHAR(150) NOT NULL,
+      message TEXT NOT NULL,
+      entity VARCHAR(50) NOT NULL,
+      entity_id INT NOT NULL,
+      is_read BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX notifications_recipient_idx (recipient_id, created_at),
+      CONSTRAINT notifications_recipient_fk FOREIGN KEY (recipient_id) REFERENCES users(employee_id)
+    ) ENGINE=InnoDB
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      employee_id VARCHAR(10) NOT NULL,
+      task_id INT NOT NULL,
+      amount DECIMAL(8,2) NOT NULL,
+      transaction_type ENUM('task_approved') NOT NULL,
+      description VARCHAR(255) NOT NULL,
+      actor_id VARCHAR(10) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY credit_task_award (task_id, transaction_type),
+      CONSTRAINT credit_transactions_employee_fk FOREIGN KEY (employee_id) REFERENCES users(employee_id),
+      CONSTRAINT credit_transactions_task_fk FOREIGN KEY (task_id) REFERENCES tasks(id),
+      CONSTRAINT credit_transactions_actor_fk FOREIGN KEY (actor_id) REFERENCES users(employee_id)
+    ) ENGINE=InnoDB
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      actor_id VARCHAR(10) NOT NULL,
+      action VARCHAR(40) NOT NULL,
+      entity VARCHAR(50) NOT NULL,
+      entity_id INT NOT NULL,
+      details JSON NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX audit_entity_idx (entity, entity_id, created_at),
+      CONSTRAINT audit_actor_fk FOREIGN KEY (actor_id) REFERENCES users(employee_id)
+    ) ENGINE=InnoDB
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS performance_weights (
+      id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+      task_weight DECIMAL(5,4) NOT NULL,
+      kpi_weight DECIMAL(5,4) NOT NULL,
+      manager_weight DECIMAL(5,4) NOT NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      CONSTRAINT performance_weights_singleton CHECK (id = 1)
+    ) ENGINE=InnoDB
+  `);
+  // EPMS default performance policy:
+  // Task Performance 40%
+  // KPI Achievement 40%
+  // Manager Rating 20%
+  await pool.query(
+    `INSERT INTO performance_weights (id, task_weight, kpi_weight, manager_weight)
+     VALUES (1, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE task_weight = VALUES(task_weight),
+       kpi_weight = VALUES(kpi_weight), manager_weight = VALUES(manager_weight)`,
+    [DEFAULT_WEIGHTS.task, DEFAULT_WEIGHTS.kpi, DEFAULT_WEIGHTS.manager]
+  );
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS self_evaluations (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      employee_id VARCHAR(10) NOT NULL,
+      period VARCHAR(7) NOT NULL,
+      major_achievements TEXT NULL,
+      strengths TEXT NULL,
+      challenges TEXT NULL,
+      goals TEXT NULL,
+      kpi_progress TEXT NULL,
+      additional_comments TEXT NULL,
+      status ENUM('draft','submitted') NOT NULL DEFAULT 'draft',
+      submitted_at DATETIME NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY self_evaluation_period (employee_id, period),
+      CONSTRAINT self_evaluations_employee_fk FOREIGN KEY (employee_id) REFERENCES users(employee_id)
+    ) ENGINE=InnoDB
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS manager_reviews (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      employee_id VARCHAR(10) NOT NULL,
+      manager_id VARCHAR(10) NOT NULL,
+      period VARCHAR(7) NOT NULL,
+      manager_rating DECIMAL(5,2) NOT NULL,
+      strengths TEXT NULL,
+      improvement_areas TEXT NULL,
+      recommendations TEXT NULL,
+      comments TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY manager_review_period (employee_id, period),
+      CONSTRAINT manager_reviews_employee_fk FOREIGN KEY (employee_id) REFERENCES users(employee_id),
+      CONSTRAINT manager_reviews_manager_fk FOREIGN KEY (manager_id) REFERENCES users(employee_id)
+    ) ENGINE=InnoDB
+  `);
+
+  const appealColumns = [
+    ['evidence', 'TEXT NULL'],
+    ['current_level', "VARCHAR(32) NOT NULL DEFAULT 'manager'"]
+  ];
+  for (const [columnNameValue, definition] of appealColumns) {
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS count FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'appeals' AND COLUMN_NAME = ?`,
+      [columnNameValue]
+    );
+    if (Number(rows[0].count) === 0) {
+      await pool.query(`ALTER TABLE appeals ADD COLUMN ${columnNameValue} ${definition}`);
+    }
+  }
+
+  await pool.query(`
+    INSERT INTO task_submissions
+      (task_id, employee_id, submission_description, work_title, work_description,
+       work_details, work_date, work_time, work_duration, status, review_comment,
+       submitted_at)
+    SELECT t.id, t.employee_id,
+      COALESCE(NULLIF(t.submitted_work_description, ''), NULLIF(t.submitted_work, ''), 'Legacy task submission'),
+      t.submitted_work_title, t.submitted_work_description, t.submitted_work,
+      t.work_date, t.work_time, t.work_duration,
+      CASE WHEN t.status IN ('approved','rejected') THEN t.status ELSE 'submitted' END,
+      t.review_notes, COALESCE(t.work_submitted_at, t.completed_at, t.updated_at)
+    FROM tasks t
+    WHERE t.status IN ('completed','submitted','approved','rejected')
+      AND (t.work_submitted_at IS NOT NULL OR t.submitted_work IS NOT NULL
+        OR t.submitted_work_title IS NOT NULL OR t.submitted_work_description IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM task_submissions s WHERE s.task_id = t.id)
+  `);
+  await pool.query("UPDATE tasks SET status = 'submitted' WHERE status = 'completed'");
+  await pool.query(`
+    INSERT INTO credit_transactions
+      (employee_id, task_id, amount, transaction_type, description, actor_id)
+    SELECT employee_id, id, credits_earned, 'task_approved',
+      CONCAT('Historical award for approved task: ', title), assigned_by
+    FROM tasks task
+    WHERE status = 'approved' AND credits_earned IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM credit_transactions transaction_row
+        WHERE transaction_row.task_id = task.id
+          AND transaction_row.transaction_type = 'task_approved'
+      )
+  `);
+}
+
+async function writeAudit(connection, actorId, action, entity, entityId, details = null) {
+  await connection.query(
+    'INSERT INTO audit_logs (actor_id, action, entity, entity_id, details) VALUES (?, ?, ?, ?, ?)',
+    [actorId, action, entity, entityId, details ? JSON.stringify(details) : null]
+  );
+}
+
+async function createNotification(connection, recipientId, title, message, entity, entityId) {
+  await connection.query(
+    'INSERT INTO notifications (recipient_id, title, message, entity, entity_id) VALUES (?, ?, ?, ?, ?)',
+    [recipientId, title, message, entity, entityId]
+  );
+}
+
+async function getManagerEmployee(managerId, employeeId, connection = pool) {
+  const [rows] = await connection.query(
+    `SELECT employee.employee_id, employee.department
+     FROM employee_directory employee
+     INNER JOIN users employee_user ON employee_user.employee_id = employee.employee_id
+       AND employee_user.role = 'employee'
+     INNER JOIN employee_directory manager ON manager.employee_id = ?
+       AND manager.department = employee.department
+     WHERE employee.employee_id = ? AND employee.resigned = FALSE`,
+    [managerId, employeeId]
+  );
+  return rows[0] || null;
+}
+
+function currentPerformancePeriod() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+async function getEmployeeManagers(employeeId, connection = pool) {
+  const [rows] = await connection.query(
+    `SELECT manager_user.employee_id
+     FROM employee_directory employee
+     INNER JOIN employee_directory manager ON manager.department = employee.department
+     INNER JOIN users manager_user ON manager_user.employee_id = manager.employee_id
+       AND manager_user.role = 'manager'
+     WHERE employee.employee_id = ?`,
+    [employeeId]
+  );
+  return rows.map((row) => row.employee_id);
 }
 
 async function ensureEmployeeWorkTable() {
@@ -284,7 +522,22 @@ async function ensureEmployeeWorkTable() {
 }
 
 // ========================= LOGIN =========================
-app.post('/login', async (req, res) => {
+const legacyRoleMap = {
+  sm: 'senior_authority',
+  senior_authority: 'senior_authority',
+  employee: 'employee',
+  manager: 'manager',
+  performance_officer: 'performance_officer',
+  board_member: 'board_member',
+  admin: 'admin'
+};
+
+function normalizeRole(role) {
+  if (!role) return role;
+  return legacyRoleMap[role] || role;
+}
+
+async function loginHandler(req, res) {
   const { email, password, role } = req.body;
 
   if (!email || !password || !role) {
@@ -299,32 +552,50 @@ app.post('/login', async (req, res) => {
     }
 
     const user = rows[0];
+    const normalizedUserRole = normalizeRole(user.role);
+    const normalizedRequestRole = normalizeRole(role);
     const passwordMatches = await bcrypt.compare(password, user.password);
 
     if (!passwordMatches) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    if (user.role !== role) {
+    if (normalizedUserRole !== normalizedRequestRole) {
       return res.status(403).json({
-        message: `These credentials are not registered for the ${role === 'employee' ? 'Employee' : role === 'manager' ? 'Chief Manager' : 'Senior Authority'} portal.`
+        message: 'These credentials are not authorized for the selected role.'
       });
     }
 
     const token = jwt.sign(
-      { id: user.id, employee_id: user.employee_id, role: user.role },
+      { id: user.id, employee_id: user.employee_id, role: normalizedUserRole },
       process.env.JWT_SECRET,
       { expiresIn: '8h' }
     );
 
-    res.json({
+    return res.json({
       message: 'Login successful',
       token,
-      user: { name: user.name, role: user.role, employee_id: user.employee_id, email: user.email }
+      user: { name: user.name, role: normalizedUserRole, employee_id: user.employee_id, email: user.email }
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({ message: 'Server error' });
+  }
+}
+
+app.post('/login', loginHandler);
+app.post('/api/auth/login', loginHandler);
+
+app.get('/api/auth/me', verifyToken, (req, res) => {
+  res.json({ success: true, message: 'Session restored', data: { user: req.user } });
+});
+
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ success: true, message: 'EPMS backend is running', database: 'connected' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Database connection failed', database: 'disconnected' });
   }
 });
 
@@ -337,100 +608,199 @@ app.get('/my-tasks', verifyToken, requireRole('employee'), async (req, res) => {
   try {
     const employeeId = req.user.employee_id;
     const [rows] = await pool.query(
-      'SELECT * FROM tasks WHERE employee_id = ? ORDER BY created_at DESC',
+      `SELECT tasks.*, users.name AS assigned_by_name
+       FROM tasks LEFT JOIN users ON users.employee_id = tasks.assigned_by
+       WHERE tasks.employee_id = ? ORDER BY tasks.created_at DESC`,
       [employeeId]
     );
 
-    const grouped = {
-      assigned: rows.filter(t => t.status === 'assigned'),
-      in_progress: rows.filter(t => t.status === 'in_progress'),
-      completed: rows.filter(t => t.status === 'completed'),
-      approved: rows.filter(t => t.status === 'approved'),
-      rejected: rows.filter(t => t.status === 'rejected')
-    };
+    const taskIds = rows.map((task) => task.id);
+    const [submissionRows] = taskIds.length
+      ? await pool.query(
+        `SELECT id, task_id, submission_description, submission_link, work_date, status,
+                review_comment, submitted_at, reviewed_at
+         FROM task_submissions WHERE task_id IN (?) ORDER BY task_id, id DESC`,
+        [taskIds]
+      )
+      : [[]];
+    const submissionsByTask = new Map();
+    for (const submission of submissionRows) {
+      const history = submissionsByTask.get(submission.task_id) || [];
+      history.push(submission);
+      submissionsByTask.set(submission.task_id, history);
+    }
 
-    const totalCredits = grouped.approved.reduce(
+    const totalCredits = rows.filter((task) => task.status === 'approved').reduce(
       (sum, t) => sum + Number(t.credits_earned || 0),
       0
     );
 
-    res.json({ tasks: grouped, totalCredits });
+    res.json({
+      success: true,
+      tasks: rows.map((task) => ({
+        ...task,
+        status: task.status === 'completed' ? 'submitted' : task.status,
+        submissions: submissionsByTask.get(task.id) || []
+      })),
+      totalCredits
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-app.patch('/tasks/:id/status', verifyToken, requireRole('employee'), async (req, res) => {
+app.get('/api/credits/my', verifyToken, requireRole('employee'), async (req, res) => {
   try {
-    const employeeId = req.user.employee_id;
-    const taskId = req.params.id;
-    const { status } = req.body;
-
-    const [rows] = await pool.query('SELECT * FROM tasks WHERE id = ?', [taskId]);
-    if (rows.length === 0) return res.status(404).json({ message: 'Task not found' });
-
-    const task = rows[0];
-    if (task.employee_id !== employeeId) {
-      return res.status(403).json({ message: 'You can only update your own tasks' });
-    }
-
-    const expectedNextStatus = allowedTransitions[task.status];
-    if (!expectedNextStatus) {
-      return res.status(400).json({ message: `Task is already '${task.status}' and cannot be updated further by you` });
-    }
-    if (status !== expectedNextStatus) {
-      return res.status(400).json({ message: `Invalid transition. From '${task.status}', you can only move to '${expectedNextStatus}'` });
-    }
-
-    if (status === 'completed') {
-      await pool.query('UPDATE tasks SET status = ?, completed_at = NOW() WHERE id = ?', [status, taskId]);
-    } else {
-      await pool.query('UPDATE tasks SET status = ? WHERE id = ?', [status, taskId]);
-    }
-
-    res.json({ message: `Task updated to '${status}'` });
+    const [rows] = await pool.query(
+      `SELECT id, task_id, amount, description, created_at
+       FROM credit_transactions WHERE employee_id = ? ORDER BY created_at DESC LIMIT 50`,
+      [req.user.employee_id]
+    );
+    const [[balance]] = await pool.query(
+      'SELECT COALESCE(SUM(amount), 0) AS balance FROM credit_transactions WHERE employee_id = ?',
+      [req.user.employee_id]
+    );
+    res.json({ success: true, balance: Number(balance.balance), transactions: rows });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Failed to load credit history' });
   }
 });
 
-// Employee submits work against an assigned task.
-app.post('/tasks/:id/submit-work', verifyToken, requireRole('employee'), async (req, res) => {
+app.get('/api/notifications/my', verifyToken, async (req, res) => {
   try {
+    const [rows] = await pool.query(
+      `SELECT id, title, message, entity, entity_id, is_read, created_at
+       FROM notifications WHERE recipient_id = ? ORDER BY created_at DESC LIMIT 30`,
+      [req.user.employee_id]
+    );
+    res.json({ success: true, notifications: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load notifications' });
+  }
+});
+
+app.patch('/api/notifications/:id/read', verifyToken, async (req, res) => {
+  try {
+    const [result] = await pool.query(
+      'UPDATE notifications SET is_read = TRUE WHERE id = ? AND recipient_id = ?',
+      [req.params.id, req.user.employee_id]
+    );
+    if (!result.affectedRows) return res.status(404).json({ message: 'Notification not found' });
+    res.json({ success: true, notification_id: Number(req.params.id), is_read: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to update notification' });
+  }
+});
+
+async function startTask(req, res) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
     const employeeId = req.user.employee_id;
     const taskId = req.params.id;
-    const { work_title, work_description, work, work_date, work_time, work_duration } = req.body;
-
-    if (!work_title || !work_description || !work || !work_date || !work_time || !work_duration) {
-      return res.status(400).json({ message: 'Work title, description, work done, date, time and duration are required' });
+    const [rows] = await connection.query('SELECT * FROM tasks WHERE id = ? FOR UPDATE', [taskId]);
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Task not found' });
     }
-
-    const [rows] = await pool.query('SELECT * FROM tasks WHERE id = ?', [taskId]);
-    if (rows.length === 0) return res.status(404).json({ message: 'Task not found' });
 
     const task = rows[0];
     if (task.employee_id !== employeeId) {
-      return res.status(403).json({ message: 'You can only submit work for your own tasks' });
+      await connection.rollback();
+      return res.status(403).json({ message: 'You can only start your own tasks' });
+    }
+    const nextStatus = allowedTransitions[task.status];
+    if (nextStatus !== 'in_progress') {
+      await connection.rollback();
+      return res.status(400).json({ message: `Task cannot be started from '${task.status}'` });
+    }
+
+    await connection.query("UPDATE tasks SET status = 'in_progress', completed_at = NULL WHERE id = ?", [taskId]);
+    await createNotification(connection, task.assigned_by, 'Task started', `${task.title} has been started by ${employeeId}.`, 'task', task.id);
+    await writeAudit(connection, employeeId, 'TASK_STARTED', 'task', task.id);
+    await connection.commit();
+    return res.json({ success: true, task: { id: Number(taskId), status: 'in_progress' } });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    return res.status(500).json({ message: 'Unable to start task' });
+  } finally {
+    connection.release();
+  }
+}
+
+app.put('/api/tasks/:id/start', verifyToken, requireRole('employee'), startTask);
+app.patch('/tasks/:id/status', verifyToken, requireRole('employee'), startTask);
+
+async function submitTask(req, res) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const employeeId = req.user.employee_id;
+    const taskId = req.params.id;
+    const { submission_description, submission_link, work_title, work_description, work, work_date, work_time, work_duration } = req.body;
+    const description = String(submission_description ?? work_description ?? work ?? '').trim();
+    const link = String(submission_link || '').trim() || null;
+    if (!description) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'Submission description is required' });
+    }
+    if (link && (!/^https?:\/\//i.test(link) || link.length > 2048)) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'Submission link must be a valid HTTP or HTTPS URL' });
+    }
+
+    const [rows] = await connection.query('SELECT * FROM tasks WHERE id = ? FOR UPDATE', [taskId]);
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Task not found' });
+    }
+
+    const task = rows[0];
+    if (task.employee_id !== employeeId) {
+      await connection.rollback();
+      return res.status(403).json({ message: 'You can only submit your own tasks' });
     }
     if (task.status !== 'in_progress') {
-      return res.status(400).json({ message: `Work can only be submitted when the task is in progress. Current status: '${task.status}'` });
+      await connection.rollback();
+      return res.status(400).json({ message: `Task can only be submitted from 'in_progress', currently '${task.status}'` });
     }
 
-    await pool.query(
-      `UPDATE tasks SET submitted_work_title = ?, submitted_work_description = ?, submitted_work = ?,
-       work_date = ?, work_time = ?, work_duration = ?, work_submitted_at = NOW(),
-       status = 'completed', completed_at = NOW() WHERE id = ?`,
-      [work_title.trim(), work_description.trim(), work.trim(), work_date, work_time, work_duration.trim(), taskId]
+    const [result] = await connection.query(
+      `INSERT INTO task_submissions
+        (task_id, employee_id, submission_description, submission_link, work_title,
+         work_description, work_details, work_date, work_time, work_duration)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [taskId, employeeId, description, link, work_title || task.title,
+        work_description || description, work || description, work_date || null,
+        work_time || null, work_duration || null]
     );
-
-    res.json({ message: 'Work submitted successfully', task_id: Number(taskId) });
+    await connection.query(
+      `UPDATE tasks SET submitted_work_title = ?, submitted_work_description = ?, submitted_work = ?,
+       submission_link = ?, work_date = ?, work_time = ?, work_duration = ?, work_submitted_at = NOW(),
+       status = 'submitted', completed_at = NOW(), review_notes = NULL WHERE id = ?`,
+      [work_title || task.title, description, work || description, link,
+        work_date || null, work_time || null, work_duration || null, taskId]
+    );
+    await createNotification(connection, task.assigned_by, 'Task submitted', `${task.title} was submitted by ${employeeId}.`, 'task', task.id);
+    await writeAudit(connection, employeeId, 'TASK_SUBMITTED', 'task', task.id, { submission_id: result.insertId });
+    await connection.commit();
+    return res.status(201).json({ success: true, task: { id: Number(taskId), status: 'submitted' }, submission_id: result.insertId });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({ message: 'Unable to submit task' });
+  } finally {
+    connection.release();
   }
-});
+}
+
+app.post('/api/tasks/:id/submit', verifyToken, requireRole('employee'), submitTask);
+app.post('/tasks/:id/submit-work', verifyToken, requireRole('employee'), submitTask);
 
 // ========================= STANDALONE EMPLOYEE WORK =========================
 app.post('/employee-work', verifyToken, requireRole('employee'), async (req, res) => {
@@ -488,6 +858,277 @@ app.get('/employee-work/:id/download', verifyToken, requireRole('employee'), asy
 });
 
 // ========================= APPEALS =========================
+app.get('/api/reviews/self', verifyToken, requireRole('employee'), async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT * FROM self_evaluations WHERE employee_id = ? AND period = ?`,
+      [req.user.employee_id, currentPerformancePeriod()]
+    );
+    res.json({ success: true, evaluation: rows[0] || null });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load self evaluation' });
+  }
+});
+
+app.post('/api/reviews/self', verifyToken, requireRole('employee'), async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const fields = ['major_achievements', 'strengths', 'challenges', 'goals', 'kpi_progress', 'additional_comments'];
+    const evaluation = Object.fromEntries(fields.map((field) => [field, String(req.body[field] || '').trim()]));
+    const status = req.body.action === 'submit' ? 'submitted' : 'draft';
+    if (status === 'submitted' && fields.slice(0, 5).some((field) => !evaluation[field])) {
+      return res.status(400).json({ message: 'Complete achievements, strengths, challenges, goals, and KPI progress before submission' });
+    }
+
+    await connection.beginTransaction();
+    const employeeId = req.user.employee_id;
+    const period = currentPerformancePeriod();
+    const [existingRows] = await connection.query(
+      'SELECT * FROM self_evaluations WHERE employee_id = ? AND period = ? FOR UPDATE',
+      [employeeId, period]
+    );
+    if (existingRows[0]?.status === 'submitted') {
+      await connection.rollback();
+      return res.status(409).json({ message: 'Submitted evaluations are final and cannot be changed' });
+    }
+
+    let evaluationId;
+    if (existingRows.length) {
+      evaluationId = existingRows[0].id;
+      await connection.query(
+        `UPDATE self_evaluations SET major_achievements = ?, strengths = ?, challenges = ?,
+         goals = ?, kpi_progress = ?, additional_comments = ?, status = ?,
+         submitted_at = IF(? = 'submitted', NOW(), NULL) WHERE id = ?`,
+        [...fields.map((field) => evaluation[field]), status, status, evaluationId]
+      );
+    } else {
+      const [result] = await connection.query(
+        `INSERT INTO self_evaluations
+          (employee_id, period, major_achievements, strengths, challenges, goals,
+           kpi_progress, additional_comments, status, submitted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = 'submitted', NOW(), NULL))`,
+        [employeeId, period, ...fields.map((field) => evaluation[field]), status, status]
+      );
+      evaluationId = result.insertId;
+      await writeAudit(connection, employeeId, 'SELF_EVALUATION_CREATED', 'self_evaluation', evaluationId, { period, status });
+    }
+
+    if (status === 'submitted') {
+      const managerIds = await getEmployeeManagers(employeeId, connection);
+      for (const managerId of managerIds) {
+        await createNotification(connection, managerId, 'Self evaluation submitted', `Employee ${employeeId} submitted the ${period} self evaluation.`, 'self_evaluation', evaluationId);
+      }
+      await writeAudit(connection, employeeId, 'SELF_EVALUATION_SUBMITTED', 'self_evaluation', evaluationId, { period });
+    }
+
+    await connection.commit();
+    return res.status(existingRows.length ? 200 : 201).json({
+      success: true,
+      evaluation: { id: evaluationId, employee_id: employeeId, period, ...evaluation, status }
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    return res.status(500).json({ message: 'Failed to save self evaluation' });
+  } finally {
+    connection.release();
+  }
+});
+
+app.get('/api/reviews/manager/team', verifyToken, requireRole('manager'), async (req, res) => {
+  try {
+    const period = currentPerformancePeriod();
+    const [rows] = await pool.query(
+      `SELECT users.employee_id, users.name, directory.department,
+        directory.performance_score AS source_kpi_score,
+        (SELECT monthly.performance_score FROM monthly_performance monthly
+         WHERE monthly.employee_id = users.employee_id ORDER BY monthly.month DESC LIMIT 1) AS current_performance,
+        (SELECT evaluation.status FROM self_evaluations evaluation
+         WHERE evaluation.employee_id = users.employee_id AND evaluation.period = ?) AS self_evaluation_status,
+        EXISTS(SELECT 1 FROM manager_reviews review
+          WHERE review.employee_id = users.employee_id AND review.period = ?) AS review_exists,
+        (SELECT COUNT(*) FROM tasks WHERE employee_id = users.employee_id) AS task_count,
+        (SELECT SUM(status = 'approved') FROM tasks WHERE employee_id = users.employee_id) AS approved_tasks
+       FROM users
+       INNER JOIN employee_directory directory ON directory.employee_id = users.employee_id
+       INNER JOIN employee_directory manager ON manager.employee_id = ? AND manager.department = directory.department
+       WHERE users.role = 'employee' AND directory.resigned = FALSE
+       ORDER BY users.name`,
+      [period, period, req.user.employee_id]
+    );
+    res.json({
+      success: true,
+      period,
+      employees: rows.map((employee) => ({
+        ...employee,
+        task_score: Number(employee.task_count) ? Number(employee.approved_tasks || 0) * 100 / Number(employee.task_count) : 0,
+        kpi_score: normalizeKpiScore(employee.source_kpi_score),
+        self_evaluation_status: employee.self_evaluation_status || 'not_started',
+        review_status: Number(employee.review_exists) ? 'submitted' : 'pending'
+      }))
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load manager review team' });
+  }
+});
+
+app.get('/api/reviews/manager/:employeeId', verifyToken, requireRole('manager'), async (req, res) => {
+  try {
+    const employeeId = req.params.employeeId;
+    const teamMember = await getManagerEmployee(req.user.employee_id, employeeId);
+    if (!teamMember) return res.status(403).json({ message: 'Employee is not in your permitted department team' });
+    const period = currentPerformancePeriod();
+    const [employeeRows] = await pool.query(
+      `SELECT users.employee_id, users.name, directory.department, directory.job_title,
+              directory.performance_score AS source_kpi_score
+       FROM users INNER JOIN employee_directory directory ON directory.employee_id = users.employee_id
+       WHERE users.employee_id = ?`,
+      [employeeId]
+    );
+    const [evaluationRows] = await pool.query(
+      'SELECT * FROM self_evaluations WHERE employee_id = ? ORDER BY period DESC LIMIT 1',
+      [employeeId]
+    );
+    const [history] = await pool.query(
+      'SELECT month, tasks_completed, manager_rating, performance_score, performance_class FROM monthly_performance WHERE employee_id = ? ORDER BY month DESC',
+      [employeeId]
+    );
+    const [taskRows] = await pool.query(
+      'SELECT id, title, status, due_date, priority, credits_earned FROM tasks WHERE employee_id = ? ORDER BY created_at DESC',
+      [employeeId]
+    );
+    const [reviewRows] = await pool.query(
+      'SELECT * FROM manager_reviews WHERE employee_id = ? ORDER BY period DESC',
+      [employeeId]
+    );
+    res.json({
+      success: true,
+      period,
+      employee: { ...employeeRows[0], kpi_score: normalizeKpiScore(employeeRows[0].source_kpi_score) },
+      self_evaluation: evaluationRows[0] || null,
+      task_score: taskRows.length ? taskRows.filter((task) => task.status === 'approved').length * 100 / taskRows.length : 0,
+      tasks: taskRows,
+      performance_history: history,
+      previous_reviews: reviewRows
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load employee review details' });
+  }
+});
+
+app.post('/api/reviews/manager', verifyToken, requireRole('manager'), async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    const employeeId = String(req.body.employee_id || '').trim();
+    const managerRating = Number(req.body.manager_rating);
+    if (!employeeId || !Number.isFinite(managerRating) || managerRating < 0 || managerRating > 100) {
+      return res.status(400).json({ message: 'Employee and a manager rating from 0 to 100 are required' });
+    }
+    const textFields = ['strengths', 'improvement_areas', 'recommendations', 'comments'];
+    const review = Object.fromEntries(textFields.map((field) => [field, String(req.body[field] || '').trim()]));
+
+    await connection.beginTransaction();
+    const authorizedEmployee = await getManagerEmployee(req.user.employee_id, employeeId, connection);
+    if (!authorizedEmployee) {
+      await connection.rollback();
+      return res.status(403).json({ message: 'Employee is not in your permitted department team' });
+    }
+    const period = currentPerformancePeriod();
+    const [evaluationRows] = await connection.query(
+      'SELECT id,status FROM self_evaluations WHERE employee_id = ? AND period = ? FOR UPDATE',
+      [employeeId, period]
+    );
+    if (evaluationRows[0]?.status !== 'submitted') {
+      await connection.rollback();
+      return res.status(409).json({ message: 'Employee must submit this period self evaluation before manager review' });
+    }
+
+    const [existingRows] = await connection.query(
+      'SELECT id FROM manager_reviews WHERE employee_id = ? AND period = ? FOR UPDATE',
+      [employeeId, period]
+    );
+    let reviewId;
+    if (existingRows.length) {
+      reviewId = existingRows[0].id;
+      await connection.query(
+        `UPDATE manager_reviews SET manager_id = ?, manager_rating = ?, strengths = ?,
+         improvement_areas = ?, recommendations = ?, comments = ? WHERE id = ?`,
+        [req.user.employee_id, managerRating, ...textFields.map((field) => review[field]), reviewId]
+      );
+    } else {
+      const [result] = await connection.query(
+        `INSERT INTO manager_reviews
+          (employee_id, manager_id, period, manager_rating, strengths, improvement_areas, recommendations, comments)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [employeeId, req.user.employee_id, period, managerRating, ...textFields.map((field) => review[field])]
+      );
+      reviewId = result.insertId;
+    }
+
+    const performance = await recalculatePerformance(connection, employeeId, period, managerRating);
+    await createNotification(connection, employeeId, 'Manager performance review completed', `Your manager review for ${period} is available.`, 'manager_review', reviewId);
+    await writeAudit(connection, req.user.employee_id, 'MANAGER_REVIEW_CREATED', 'manager_review', reviewId, { employee_id: employeeId, period, manager_rating: managerRating });
+    await writeAudit(connection, req.user.employee_id, 'PERFORMANCE_RECALCULATED', 'monthly_performance', performance.id, {
+      employee_id: employeeId, period, score: performance.score, weights: performance.weights
+    });
+    await connection.commit();
+    return res.json({ success: true, review_id: reviewId, period, performance });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    return res.status(500).json({ message: 'Failed to save manager review' });
+  } finally {
+    connection.release();
+  }
+});
+
+app.get('/api/reviews/performance/my', verifyToken, requireRole('employee'), async (req, res) => {
+  try {
+    const employeeId = req.user.employee_id;
+    const [employeeRows] = await pool.query(
+      'SELECT performance_score FROM employee_directory WHERE employee_id = ?',
+      [employeeId]
+    );
+    const [history] = await pool.query(
+      'SELECT id, month, tasks_completed, manager_rating, performance_score, performance_class FROM monthly_performance WHERE employee_id = ? ORDER BY month',
+      [employeeId]
+    );
+    const current = history[history.length - 1] || null;
+    const [reviewRows] = current
+      ? await pool.query('SELECT * FROM manager_reviews WHERE employee_id = ? AND period = ?', [employeeId, current.month])
+      : [[]];
+    const [[taskCounts]] = await pool.query(
+      `SELECT COUNT(*) AS task_count, SUM(status = 'approved') AS approved_count
+       FROM tasks WHERE employee_id = ?`,
+      [employeeId]
+    );
+    const taskScore = Number(taskCounts.task_count)
+      ? Number(taskCounts.approved_count || 0) * 100 / Number(taskCounts.task_count)
+      : 0;
+    const kpiScore = normalizeKpiScore(employeeRows[0]?.performance_score);
+    const managerRating = Number(current?.manager_rating || 0);
+    const weights = await getPerformanceWeights(pool);
+    res.json({
+      success: true,
+      performance: current ? {
+        ...current,
+        performance_class: getPerformanceClassification(Number(current.performance_score)),
+        task_score: Number(taskScore.toFixed(2)), kpi_score: kpiScore, manager_rating: managerRating,
+        appeal_id: current.id
+      } : null,
+      feedback: reviewRows[0] || null,
+      history,
+      weights
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to load performance summary' });
+  }
+});
+
 app.get('/my-appeals', verifyToken, requireRole('employee'), async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM appeals WHERE employee_id = ? ORDER BY created_at DESC', [req.user.employee_id]);
@@ -498,45 +1139,103 @@ app.get('/my-appeals', verifyToken, requireRole('employee'), async (req, res) =>
   }
 });
 
-app.post('/appeals', verifyToken, requireRole('employee'), async (req, res) => {
+async function createEmployeeAppeal(req, res) {
+  const connection = await pool.getConnection();
   try {
     const employeeId = req.user.employee_id;
-    const { task_id, monthly_performance_id, reason } = req.body;
-    if (!reason) return res.status(400).json({ message: 'Reason is required' });
+    const { task_id, monthly_performance_id, reason, evidence } = req.body;
+    const normalizedReason = String(reason || '').trim();
+    const normalizedEvidence = String(evidence || '').trim() || null;
+    if (!normalizedReason) return res.status(400).json({ message: 'Reason is required' });
     if (!task_id && !monthly_performance_id) return res.status(400).json({ message: 'Must provide either task_id or monthly_performance_id' });
     if (task_id && monthly_performance_id) return res.status(400).json({ message: 'Provide only one: task_id OR monthly_performance_id, not both' });
 
+    await connection.beginTransaction();
     let appealType = 'monthly_rating';
     if (task_id) {
-      const [taskRows] = await pool.query('SELECT * FROM tasks WHERE id = ?', [task_id]);
-      if (!taskRows.length) return res.status(404).json({ message: 'Task not found' });
+      const [taskRows] = await connection.query('SELECT * FROM tasks WHERE id = ? FOR UPDATE', [task_id]);
+      if (!taskRows.length) {
+        await connection.rollback();
+        return res.status(404).json({ message: 'Task not found' });
+      }
       const task = taskRows[0];
-      if (task.employee_id !== employeeId) return res.status(403).json({ message: 'You can only appeal your own tasks' });
+      if (task.employee_id !== employeeId) {
+        await connection.rollback();
+        return res.status(403).json({ message: 'You can only appeal your own tasks' });
+      }
 
       if (task.status === 'rejected') appealType = 'task_rejection';
       else if (task.status === 'approved' && task.credit_rating !== null && task.credit_rating <= 3) appealType = 'task_low_credit';
-      else if (task.status === 'approved') return res.status(400).json({ message: `This task's credit rating (${task.credit_rating ?? 'none'}/5) is already 4 or above and cannot be appealed` });
-      else return res.status(400).json({ message: `Only rejected tasks, or approved tasks with a credit rating of 3 or below, can be appealed. This task is currently '${task.status}'` });
+      else if (task.status === 'approved') {
+        await connection.rollback();
+        return res.status(400).json({ message: `This task's credit rating (${task.credit_rating ?? 'none'}/5) is already 4 or above and cannot be appealed` });
+      } else {
+        await connection.rollback();
+        return res.status(400).json({ message: `Only rejected tasks, or approved tasks with a credit rating of 3 or below, can be appealed. This task is currently '${task.status}'` });
+      }
 
-      const [existingRows] = await pool.query("SELECT id FROM appeals WHERE task_id = ? AND status = 'pending'", [task_id]);
-      if (existingRows.length) return res.status(400).json({ message: 'There is already a pending appeal for this task' });
+      const [existingRows] = await connection.query("SELECT id FROM appeals WHERE task_id = ? AND status = 'pending' FOR UPDATE", [task_id]);
+      if (existingRows.length) {
+        await connection.rollback();
+        return res.status(409).json({ message: 'There is already a pending appeal for this task' });
+      }
+    } else {
+      const [performanceRows] = await connection.query(
+        'SELECT id FROM monthly_performance WHERE id = ? AND employee_id = ? FOR UPDATE',
+        [monthly_performance_id, employeeId]
+      );
+      if (!performanceRows.length) {
+        await connection.rollback();
+        return res.status(404).json({ message: 'Performance review not found' });
+      }
+      const [existingRows] = await connection.query(
+        "SELECT id FROM appeals WHERE monthly_performance_id = ? AND status = 'pending' FOR UPDATE",
+        [monthly_performance_id]
+      );
+      if (existingRows.length) {
+        await connection.rollback();
+        return res.status(409).json({ message: 'There is already a pending appeal for this performance review' });
+      }
     }
 
-    const [result] = await pool.query(
-      'INSERT INTO appeals (employee_id, task_id, monthly_performance_id, reason, status, appeal_type) VALUES (?, ?, ?, ?, ?, ?)',
-      [employeeId, task_id || null, monthly_performance_id || null, reason, 'pending', appealType]
+    const [result] = await connection.query(
+      `INSERT INTO appeals
+        (employee_id, task_id, monthly_performance_id, reason, evidence, status, appeal_type, current_level)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, 'manager')`,
+      [employeeId, task_id || null, monthly_performance_id || null, normalizedReason, normalizedEvidence, appealType]
     );
-    res.status(201).json({ message: 'Appeal submitted', appealId: result.insertId, appeal_type: appealType });
+    const managerIds = await getEmployeeManagers(employeeId, connection);
+    for (const managerId of managerIds) {
+      await createNotification(connection, managerId, 'Employee appeal submitted', `Employee ${employeeId} submitted an appeal for manager review.`, 'appeal', result.insertId);
+    }
+    await writeAudit(connection, employeeId, 'APPEAL_CREATED', 'appeal', result.insertId, { appeal_type: appealType });
+    await connection.commit();
+    return res.status(201).json({ success: true, message: 'Appeal submitted', appealId: result.insertId, appeal_type: appealType, current_level: 'manager' });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({ message: 'Failed to submit appeal' });
+  } finally {
+    connection.release();
   }
-});
+}
+
+app.post('/api/appeals', verifyToken, requireRole('employee'), createEmployeeAppeal);
+app.post('/appeals', verifyToken, requireRole('employee'), createEmployeeAppeal);
 
 // ========================= MANAGER =========================
 app.get('/manager/employees', verifyToken, requireRole('manager'), async (req, res) => {
   try {
-    const [rows] = await pool.query(`SELECT employee_id, department, job_title, assigned_role FROM employee_directory WHERE assigned_role = 'employee' AND resigned = FALSE ORDER BY employee_id ASC`);
+    const [rows] = await pool.query(
+      `SELECT employee.employee_id, employee.department, employee.job_title
+       FROM employee_directory employee
+       INNER JOIN users employee_user ON employee_user.employee_id = employee.employee_id
+         AND employee_user.role = 'employee'
+       INNER JOIN employee_directory manager ON manager.employee_id = ?
+         AND manager.department = employee.department
+       WHERE employee.resigned = FALSE ORDER BY employee.employee_id ASC`,
+      [req.user.employee_id]
+    );
     res.json({ employees: rows });
   } catch (err) {
     console.error(err);
@@ -545,34 +1244,64 @@ app.get('/manager/employees', verifyToken, requireRole('manager'), async (req, r
 });
 
 app.post('/tasks', verifyToken, requireRole('manager'), async (req, res) => {
+  const connection = await pool.getConnection();
   try {
-    const { employee_id, title, description, due_date } = req.body;
-    if (!employee_id || !title || !description || !due_date) return res.status(400).json({ message: 'Employee, title, description and due date are required' });
+    const { employee_id, title, description, due_date, priority = 'medium' } = req.body;
+    const normalizedTitle = String(title || '').trim();
+    const normalizedDescription = String(description || '').trim();
+    const allowedPriorities = ['low', 'medium', 'high', 'critical'];
+    if (!employee_id || !normalizedTitle || !normalizedDescription || !due_date) {
+      return res.status(400).json({ message: 'Employee, title, description and due date are required' });
+    }
+    if (!allowedPriorities.includes(priority)) return res.status(400).json({ message: 'Priority must be low, medium, high, or critical' });
+    if (Number.isNaN(Date.parse(due_date))) return res.status(400).json({ message: 'Deadline must be a valid date' });
 
-    const [employeeRows] = await pool.query(
-      `SELECT employee_id FROM employee_directory WHERE employee_id = ? AND assigned_role = 'employee' AND resigned = FALSE`,
-      [employee_id]
-    );
-    if (!employeeRows.length) return res.status(400).json({ message: 'Invalid employee selected' });
+    await connection.beginTransaction();
+    const employee = await getManagerEmployee(req.user.employee_id, employee_id, connection);
+    if (!employee) {
+      await connection.rollback();
+      return res.status(403).json({ message: 'Employee is not in your permitted department team' });
+    }
 
-    const [result] = await pool.query(
-      `INSERT INTO tasks (employee_id, assigned_by, title, description, due_date, status, credit_rating, credits_earned)
-       VALUES (?, ?, ?, ?, ?, 'assigned', NULL, NULL)`,
-      [employee_id, req.user.employee_id, title.trim(), description.trim(), due_date]
+    const [result] = await connection.query(
+      `INSERT INTO tasks (employee_id, assigned_by, title, description, due_date, priority, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'assigned')`,
+      [employee_id, req.user.employee_id, normalizedTitle, normalizedDescription, due_date, priority]
     );
-    res.status(201).json({ message: 'Work assigned successfully', task_id: result.insertId, employee_id });
+    await createNotification(connection, employee_id, 'Task assigned', `${normalizedTitle} was assigned to you.`, 'task', result.insertId);
+    await writeAudit(connection, req.user.employee_id, 'TASK_CREATED', 'task', result.insertId, { employee_id, priority });
+    await connection.commit();
+    return res.status(201).json({
+      success: true,
+      task: {
+        id: result.insertId, employee_id, assigned_by: req.user.employee_id,
+        title: normalizedTitle, description: normalizedDescription, due_date,
+        priority, status: 'assigned'
+      }
+    });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({ message: 'Failed to assign task' });
+  } finally {
+    connection.release();
   }
 });
 
 app.get('/team-tasks/pending-review', verifyToken, requireRole('manager'), async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT tasks.*, COALESCE(users.name, tasks.employee_id) AS employee_name
-       FROM tasks LEFT JOIN users ON users.employee_id = tasks.employee_id
-       WHERE tasks.assigned_by = ? AND tasks.status = 'completed' ORDER BY tasks.completed_at ASC`,
+      `SELECT tasks.*, COALESCE(users.name, tasks.employee_id) AS employee_name,
+              submissions.id AS submission_id,
+              submissions.submission_description, submissions.submission_link,
+              submissions.submitted_at
+       FROM tasks
+       LEFT JOIN users ON users.employee_id = tasks.employee_id
+       LEFT JOIN task_submissions submissions ON submissions.id = (
+         SELECT MAX(latest.id) FROM task_submissions latest WHERE latest.task_id = tasks.id
+       )
+       WHERE tasks.assigned_by = ? AND tasks.status = 'submitted'
+       ORDER BY submissions.submitted_at ASC`,
       [req.user.employee_id]
     );
     res.json({ tasks: rows.map(task => ({ ...task, is_late: task.due_date ? new Date(task.completed_at) > new Date(task.due_date) : null })) });
@@ -582,39 +1311,106 @@ app.get('/team-tasks/pending-review', verifyToken, requireRole('manager'), async
   }
 });
 
-app.patch('/tasks/:id/review', verifyToken, requireRole('manager'), async (req, res) => {
+async function reviewTask(req, res) {
+  const connection = await pool.getConnection();
   try {
+    await connection.beginTransaction();
     const taskId = req.params.id;
-    const { decision, quality_rating, credit_rating, review_notes } = req.body;
-    if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ message: "decision must be 'approved' or 'rejected'" });
-    if (!['satisfactory', 'unsatisfactory'].includes(quality_rating)) return res.status(400).json({ message: "quality_rating must be 'satisfactory' or 'unsatisfactory'" });
+    const { decision, comment, review_notes, credit_rating } = req.body;
+    const rejectionComment = String(comment ?? review_notes ?? '').trim();
+    if (!['approved', 'rejected'].includes(decision)) {
+      await connection.rollback();
+      return res.status(400).json({ message: "decision must be 'approved' or 'rejected'" });
+    }
+    if (decision === 'rejected' && !rejectionComment) {
+      await connection.rollback();
+      return res.status(400).json({ message: 'A rejection comment is required' });
+    }
 
     let creditRatingValue = null;
     if (decision === 'approved') {
-      if (!Number.isInteger(credit_rating) || credit_rating < 1 || credit_rating > 5) return res.status(400).json({ message: 'credit_rating is required when approving and must be an integer from 1 to 5' });
-      creditRatingValue = credit_rating;
+      creditRatingValue = Number(credit_rating);
+      if (!Number.isInteger(creditRatingValue) || creditRatingValue < 1 || creditRatingValue > 5) {
+        await connection.rollback();
+        return res.status(400).json({ message: 'credit_rating is required when approving and must be an integer from 1 to 5' });
+      }
     }
 
-    const [rows] = await pool.query('SELECT * FROM tasks WHERE id = ?', [taskId]);
-    if (!rows.length) return res.status(404).json({ message: 'Task not found' });
+    const [rows] = await connection.query('SELECT * FROM tasks WHERE id = ? FOR UPDATE', [taskId]);
+    if (!rows.length) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Task not found' });
+    }
     const task = rows[0];
-    if (task.assigned_by !== req.user.employee_id) return res.status(403).json({ message: 'You can only review tasks you assigned' });
-    if (task.status !== 'completed') return res.status(400).json({ message: `Task must be 'completed' to review, currently '${task.status}'` });
+    if (task.assigned_by !== req.user.employee_id) {
+      await connection.rollback();
+      return res.status(403).json({ message: 'You can only review tasks assigned by you' });
+    }
+    if (task.status !== 'submitted') {
+      await connection.rollback();
+      return res.status(400).json({ message: `Task must be 'submitted' to review, currently '${task.status}'` });
+    }
 
     let credits = null;
     if (decision === 'approved') {
-      const [perfRows] = await pool.query('SELECT performance_score FROM monthly_performance WHERE employee_id = ? ORDER BY month DESC LIMIT 1', [task.employee_id]);
+      const [perfRows] = await connection.query('SELECT performance_score FROM monthly_performance WHERE employee_id = ? ORDER BY month DESC LIMIT 1 FOR UPDATE', [task.employee_id]);
       const latestScore = perfRows.length ? Number(perfRows[0].performance_score) : 50;
       credits = (latestScore / 10).toFixed(2);
     }
 
-    await pool.query('UPDATE tasks SET status = ?, quality_rating = ?, credit_rating = ?, review_notes = ?, credits_earned = ? WHERE id = ?', [decision, quality_rating, creditRatingValue, review_notes || null, credits, taskId]);
-    res.json({ message: `Task ${decision}`, credits_earned: credits, credit_rating: creditRatingValue });
+    const qualityRating = decision === 'approved' ? 'satisfactory' : 'unsatisfactory';
+    await connection.query(
+      'UPDATE tasks SET status = ?, quality_rating = ?, credit_rating = ?, review_notes = ?, credits_earned = ? WHERE id = ?',
+      [decision, qualityRating, creditRatingValue, decision === 'rejected' ? rejectionComment : (review_notes || null), credits, taskId]
+    );
+    const [submissionRows] = await connection.query(
+      'SELECT id FROM task_submissions WHERE task_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE',
+      [taskId]
+    );
+    if (submissionRows.length) {
+      await connection.query(
+        'UPDATE task_submissions SET status = ?, review_comment = ?, reviewed_by = ?, reviewed_at = NOW() WHERE id = ?',
+        [decision, decision === 'rejected' ? rejectionComment : (review_notes || null), req.user.employee_id, submissionRows[0].id]
+      );
+    }
+
+    let performance = null;
+    if (decision === 'approved') {
+      await connection.query(
+        `INSERT INTO credit_transactions (employee_id, task_id, amount, transaction_type, description, actor_id)
+         VALUES (?, ?, ?, 'task_approved', ?, ?)`,
+        [task.employee_id, task.id, credits, `Credits for approved task: ${task.title}`, req.user.employee_id]
+      );
+      await writeAudit(connection, req.user.employee_id, 'CREDITS_AWARDED', 'task', task.id, { amount: Number(credits) });
+      performance = await recalculatePerformance(
+        connection, task.employee_id, currentPerformancePeriod(), creditRatingValue * 20
+      );
+    }
+
+    await createNotification(
+      connection, task.employee_id, decision === 'approved' ? 'Task approved' : 'Task rejected',
+      decision === 'approved' ? `${task.title} was approved.` : `${task.title} was rejected: ${rejectionComment}`,
+      'task', task.id
+    );
+    await writeAudit(connection, req.user.employee_id, decision === 'approved' ? 'TASK_APPROVED' : 'TASK_REJECTED', 'task', task.id,
+      decision === 'rejected' ? { comment: rejectionComment } : { credit_rating: creditRatingValue });
+    await connection.commit();
+    return res.json({
+      success: true, task: { id: Number(taskId), status: decision },
+      credits_earned: credits === null ? null : Number(credits),
+      performance_score: performance?.score ?? null
+    });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({ message: 'Failed to review task' });
+  } finally {
+    connection.release();
   }
-});
+}
+
+app.post('/api/tasks/:id/review', verifyToken, requireRole('manager'), reviewTask);
+app.patch('/tasks/:id/review', verifyToken, requireRole('manager'), reviewTask);
 
 // Manager sees every standalone employee-work submission with full content.
 app.get('/manager/employee-work', verifyToken, requireRole('manager'), async (req, res) => {
@@ -677,11 +1473,11 @@ app.get('/manager/employee-work/:id/download', verifyToken, requireRole('manager
 
 app.get('/manager/stats', verifyToken, requireRole('manager'), async (req, res) => {
   try {
-    const [rows] = await pool.query(`SELECT COUNT(*) AS total_tasks, SUM(status='assigned') AS assigned_tasks, SUM(status='in_progress') AS in_progress_tasks, SUM(status='completed') AS completed_tasks, SUM(status='approved') AS approved_tasks, SUM(status='rejected') AS rejected_tasks FROM tasks WHERE assigned_by = ?`, [req.user.employee_id]);
-    const [employeeRows] = await pool.query(`SELECT COUNT(*) AS total_members FROM employee_directory WHERE assigned_role = 'employee'`);
+    const [rows] = await pool.query(`SELECT COUNT(*) AS total_tasks, SUM(status='assigned') AS assigned_tasks, SUM(status='in_progress') AS in_progress_tasks, SUM(status='submitted') AS submitted_tasks, SUM(status='approved') AS approved_tasks, SUM(status='rejected') AS rejected_tasks FROM tasks WHERE assigned_by = ?`, [req.user.employee_id]);
+    const [employeeRows] = await pool.query(`SELECT COUNT(*) AS total_members FROM employee_directory employee INNER JOIN users ON users.employee_id = employee.employee_id AND users.role = 'employee' INNER JOIN employee_directory manager ON manager.employee_id = ? AND manager.department = employee.department WHERE employee.resigned = FALSE`, [req.user.employee_id]);
     res.json({
       total_tasks: Number(rows[0].total_tasks || 0), assigned_tasks: Number(rows[0].assigned_tasks || 0),
-      in_progress_tasks: Number(rows[0].in_progress_tasks || 0), completed_tasks: Number(rows[0].completed_tasks || 0),
+      in_progress_tasks: Number(rows[0].in_progress_tasks || 0), submitted_tasks: Number(rows[0].submitted_tasks || 0),
       approved_tasks: Number(rows[0].approved_tasks || 0), rejected_tasks: Number(rows[0].rejected_tasks || 0),
       total_members: Number(employeeRows[0].total_members || 0)
     });
@@ -737,7 +1533,8 @@ app.get('/appeals/pending', verifyToken, requireRole('sm'), async (req, res) => 
       tasks.work_date, tasks.work_time, tasks.work_duration, tasks.work_submitted_at,
       COALESCE(users.name, appeals.employee_id) AS employee_name
       FROM appeals LEFT JOIN tasks ON appeals.task_id = tasks.id LEFT JOIN users ON users.employee_id = appeals.employee_id
-      WHERE appeals.status = 'pending' ORDER BY appeals.created_at ASC`
+      WHERE appeals.status = 'pending' AND appeals.current_level = 'senior_authority'
+      ORDER BY appeals.created_at ASC`
     );
     res.json({ appeals: rows });
   } catch (err) {
@@ -756,6 +1553,7 @@ app.patch('/appeals/:id/resolve', verifyToken, requireRole('sm'), async (req, re
     if (!appealRows.length) return res.status(404).json({ message: 'Appeal not found' });
     const appeal = appealRows[0];
     if (appeal.status !== 'pending') return res.status(400).json({ message: `Appeal already resolved as '${appeal.status}'` });
+    if (appeal.current_level !== 'senior_authority') return res.status(403).json({ message: 'Appeal has not reached the senior authority level' });
 
     let credits = null;
     let updatedCreditRating = null;
@@ -798,6 +1596,186 @@ app.get('/appeals/stats', verifyToken, requireRole('sm'), async (req, res) => {
   }
 });
 
+app.get('/dashboard/analytics', verifyToken, async (req, res) => {
+  try {
+    const [monthlyRows] = await pool.query(`
+      SELECT DATE_FORMAT(month, '%Y-%m') AS month,
+             ROUND(AVG(performance_score), 2) AS avg_score
+      FROM monthly_performance
+      GROUP BY DATE_FORMAT(month, '%Y-%m')
+      ORDER BY month DESC
+      LIMIT 6
+    `);
+
+    const [departmentRows] = await pool.query(`
+      SELECT ed.department AS name,
+             ROUND(AVG(mp.performance_score), 2) AS score
+      FROM monthly_performance mp
+      INNER JOIN employee_directory ed ON ed.employee_id = mp.employee_id
+      WHERE ed.department IS NOT NULL AND ed.department <> ''
+      GROUP BY ed.department
+      ORDER BY score DESC
+      LIMIT 6
+    `);
+
+    const [performanceRows] = await pool.query('SELECT performance_score FROM monthly_performance');
+    const classifications = new Map();
+    for (const row of performanceRows) {
+      const name = getPerformanceClassification(Number(row.performance_score));
+      classifications.set(name, (classifications.get(name) || 0) + 1);
+    }
+    const distributionRows = [...classifications].map(([name, value]) => ({ name, value }));
+
+    const [employeeRows] = await pool.query(`
+      SELECT employee_id AS employeeId,
+             ROUND(AVG(performance_score), 2) AS score,
+             MAX(month) AS latestMonth
+      FROM monthly_performance
+      GROUP BY employee_id
+      ORDER BY score DESC
+      LIMIT 8
+    `);
+
+    res.json({
+      success: true,
+      message: 'Analytics loaded successfully',
+      data: {
+        monthlyTrend: [...monthlyRows].reverse(),
+        departmentComparison: departmentRows,
+        distribution: distributionRows,
+        employeePerformance: employeeRows
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Unable to load analytics' });
+  }
+});
+
+app.get('/performance-officer/dashboard', verifyToken, requireRole('performance_officer'), async (req, res) => {
+  try {
+    const [statsRows] = await pool.query(`
+      SELECT COUNT(*) AS total_cases,
+             SUM(status = 'pending') AS pending_cases,
+             SUM(status = 'approved') AS approved_cases,
+             SUM(status = 'rejected') AS rejected_cases
+      FROM appeals
+    `);
+
+    const [casesRows] = await pool.query(`
+      SELECT a.*, u.name AS employee_name, t.title AS task_title
+      FROM appeals a
+      LEFT JOIN users u ON u.employee_id = a.employee_id
+      LEFT JOIN tasks t ON t.id = a.task_id
+      WHERE a.status = 'pending'
+      ORDER BY a.created_at DESC
+      LIMIT 10
+    `);
+
+    const [teamRows] = await pool.query(`
+      SELECT ROUND(AVG(performance_score), 2) AS team_average,
+             MIN(performance_score) AS lowest_score,
+             MAX(performance_score) AS highest_score
+      FROM monthly_performance
+    `);
+
+    const [alertRows] = await pool.query(`
+      SELECT employee_id, performance_score, month
+      FROM monthly_performance
+      WHERE performance_score < 60
+      ORDER BY month DESC
+      LIMIT 5
+    `);
+
+    res.json({
+      success: true,
+      message: 'Performance officer dashboard loaded',
+      data: {
+        stats: { total_cases: Number(statsRows[0].total_cases || 0), pending_cases: Number(statsRows[0].pending_cases || 0), approved_cases: Number(statsRows[0].approved_cases || 0), rejected_cases: Number(statsRows[0].rejected_cases || 0) },
+        cases: casesRows,
+        teamAverage: Number(teamRows[0].team_average || 0),
+        alerts: alertRows
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Unable to load dashboard' });
+  }
+});
+
+app.get('/appeal-board/dashboard', verifyToken, requireRole('board_member'), async (req, res) => {
+  try {
+    const [statsRows] = await pool.query(`
+      SELECT COUNT(*) AS total_cases,
+             SUM(status = 'pending') AS pending_cases,
+             SUM(status = 'approved') AS approved_cases,
+             SUM(status = 'rejected') AS rejected_cases
+      FROM appeals
+    `);
+
+    const [casesRows] = await pool.query(`
+      SELECT a.*, u.name AS employee_name, t.title AS task_title
+      FROM appeals a
+      LEFT JOIN users u ON u.employee_id = a.employee_id
+      LEFT JOIN tasks t ON t.id = a.task_id
+      ORDER BY a.created_at DESC
+      LIMIT 12
+    `);
+
+    const [recentRows] = await pool.query(`
+      SELECT a.id, u.name AS employee_name, a.status, a.created_at
+      FROM appeals a
+      LEFT JOIN users u ON u.employee_id = a.employee_id
+      WHERE a.status IN ('approved', 'rejected')
+      ORDER BY a.resolved_at DESC, a.created_at DESC
+      LIMIT 6
+    `);
+
+    res.json({
+      success: true,
+      message: 'Appeal board dashboard loaded',
+      data: {
+        stats: { total_cases: Number(statsRows[0].total_cases || 0), pending_cases: Number(statsRows[0].pending_cases || 0), approved_cases: Number(statsRows[0].approved_cases || 0), rejected_cases: Number(statsRows[0].rejected_cases || 0) },
+        cases: casesRows,
+        recentDecisions: recentRows
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Unable to load board dashboard' });
+  }
+});
+
+app.get('/admin/dashboard', verifyToken, requireRole('admin'), async (req, res) => {
+  try {
+    const [userRows] = await pool.query(`SELECT COUNT(*) AS total_users FROM users`);
+    const [taskRows] = await pool.query(`SELECT COUNT(*) AS total_tasks, SUM(status='assigned') AS assigned_tasks, SUM(status='submitted') AS submitted_tasks, SUM(status='approved') AS approved_tasks FROM tasks`);
+    const [appealRows] = await pool.query(`SELECT COUNT(*) AS total_appeals, SUM(status='pending') AS pending_appeals FROM appeals`);
+    const [auditRows] = await pool.query(`SELECT employee_id, name, email, role, created_at FROM users ORDER BY created_at DESC LIMIT 5`);
+
+    res.json({
+      success: true,
+      message: 'Admin dashboard loaded',
+      data: {
+        stats: {
+          total_users: Number(userRows[0].total_users || 0),
+          total_tasks: Number(taskRows[0].total_tasks || 0),
+          assigned_tasks: Number(taskRows[0].assigned_tasks || 0),
+          submitted_tasks: Number(taskRows[0].submitted_tasks || 0),
+          completed_tasks: Number(taskRows[0].approved_tasks || 0),
+          approved_tasks: Number(taskRows[0].approved_tasks || 0),
+          total_appeals: Number(appealRows[0].total_appeals || 0),
+          pending_appeals: Number(appealRows[0].pending_appeals || 0)
+        },
+        recentUsers: auditRows
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Unable to load admin dashboard' });
+  }
+});
+
 // Senior Authority can see and download all standalone employee submissions.
 app.get('/senior/employee-work', verifyToken, requireRole('sm'), async (req, res) => {
   try {
@@ -822,7 +1800,9 @@ app.get('/senior/employee-work/:id/download', verifyToken, requireRole('sm'), as
 
 const PORT = process.env.PORT || 3000;
 
-Promise.all([ensureTaskColumns(), ensureEmployeeWorkTable()])
+ensureTaskColumns()
+  .then(() => ensureEmployeeWorkTable())
+  .then(() => ensureWorkflowSchema())
   .then(() => {
     app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
   })

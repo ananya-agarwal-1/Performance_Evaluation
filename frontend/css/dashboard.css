@@ -1,0 +1,14 @@
+.summary-table { display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); border: 1px solid var(--border); }
+.summary-table div { display: grid; gap: 3px; padding: 12px; border-right: 1px solid var(--border); }
+.summary-table div:last-child { border-right: 0; }
+.summary-table span { color: #555e66; }
+.summary-table strong { font-size: 19px; }
+.notification-unread { font-weight: 600; }
+.task-detail { margin-top: 14px; padding: 12px; border: 1px solid var(--border); background: #fafafa; }
+.meter-row { margin: 12px 0; }
+.meter-row p { margin-bottom: 5px; }
+@media (max-width: 760px) {
+    .summary-table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .summary-table div:nth-child(2) { border-right: 0; }
+    .summary-table div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+}

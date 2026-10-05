@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign In | EPMS</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/login.css">
+</head>
+<body class="login-page">
+    <main class="login-panel">
+        <h1>Employee Performance<br>Management System</h1>
+        <p class="intro">Select your account role to sign in.</p>
+        <div id="role-selection" class="role-selection">
+            <button type="button" data-role="employee">Employee</button>
+            <button type="button" data-role="manager">Manager</button>
+            <button type="button" data-role="senior_authority">Senior Authority</button>
+        </div>
+        <form id="login-form" hidden>
+            <p>Selected role: <strong id="selected-role"></strong></p>
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="username" required>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button class="primary-button" type="submit">Log In</button>
+            <button id="back-to-roles" class="text-button" type="button">Back to role selection</button>
+        </form>
+        <p id="page-message" class="message" role="status" aria-live="polite"></p>
+    </main>
+    <script type="module" src="js/login.js"></script>
+</body>
+</html>

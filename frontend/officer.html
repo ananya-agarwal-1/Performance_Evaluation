@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Performance Officer | EPMS</title><link rel="stylesheet" href="css/style.css"><link rel="stylesheet" href="css/dashboard.css"></head>
+<body><header><h1>Employee Performance Management System</h1><p>Performance Officer | <strong data-user-name></strong></p></header>
+<nav><a href="#home">Home</a><a href="#cases">Cases</a><a href="#performance">Performance Reviews</a><button type="button" data-logout>Logout</button></nav>
+<main><p id="page-message" class="message" role="status"></p><section id="home"><h2>Performance Officer</h2><p id="officer-summary">Loading current cases and performance data.</p></section>
+<section id="cases"><h2>Pending Cases</h2><div class="table-wrap"><table><thead><tr><th>Appeal</th><th>Employee</th><th>Reason</th><th>Status</th><th>Created</th></tr></thead><tbody id="case-list"></tbody></table></div></section>
+<section id="performance"><h2>Performance Overview</h2><dl id="performance-overview" class="definition-list"></dl><h3>Cases</h3><ul id="officer-alerts"></ul></section></main><footer>Employee Performance Management System</footer><script type="module" src="js/officer.js"></script></body></html>
