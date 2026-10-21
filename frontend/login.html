@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login | EPMS</title>
+<link rel="stylesheet" href="css/login.css">
+</head>
+<body class="login-bg">
+<div class="login-box">
+  <h1>EPMS <span>Login</span></h1>
+  <form id="login-form">
+    <div class="choice">
+      <label><input type="radio" name="group" value="user" checked> User</label>
+      <label><input type="radio" name="group" value="admin"> HR / Admin</label>
+    </div>
+    <label class="field-label" for="role">Login as</label>
+    <select id="role" name="role" required></select>
+    <input id="email" name="email" type="email" placeholder="Email" autocomplete="username" required>
+    <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Submit</button>
+    <p id="page-message" class="message" role="status"></p>
+  </form>
+  <p class="links"><a href="forgot-password.html">Forgot password?</a></p>
+</div>
+<script type="module" src="js/login.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Profile | EPMS</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="container">
+  <div class="page-title">
+    <div><h2>Profile</h2><p class="muted">Your account and employment details.</p></div>
+    <div class="actions" style="margin:0"><a class="button" href="reports.html?type=credits">Credit history</a><a class="button secondary" href="employee-detail.html">Full employee record</a></div>
+  </div>
+  <section class="card">
+    <div id="profile-head" class="profile-head"></div>
+    <dl id="profile" class="profile-grid"></dl>
+  </section>
+</main>
+<script type="module">
+import{apiGet,escapeHTML,requireRole}from'./js/common.js';
+import{roleName}from'./js/auth.js';
+const u=await requireRole(['employee','manager','senior_authority','sm','performance_officer','board_member','admin']);
+if(u){
+  document.querySelector('[data-logout]').onclick=()=>{localStorage.clear();location.href='login.html'};
+  const r=await apiGet('/api/profile');
+  const p=r.profile||{};
+  const name=p.name||u.name||u.employee_id||'User';
+  document.querySelector('#profile-head').innerHTML=`<span class="avatar">${escapeHTML(String(name).charAt(0).toUpperCase())}</span><div><h3>${escapeHTML(name)}</h3><div class="muted">${escapeHTML(roleName(u.role))}${p.employee_id?' · '+escapeHTML(p.employee_id):''}</div></div>`;
+  const fields=[['employee_id','Employee ID'],['name','Name'],['email','Email'],['department','Department'],['designation','Designation'],['hire_date','Joined'],['years_at_company','Years at company'],['projects_handled','Projects handled'],['training_hours','Training hours'],['promotions','Promotions'],['performance_score','Performance score'],['employee_satisfaction_score','Satisfaction score']];
+  document.querySelector('#profile').innerHTML=fields.filter(([k])=>p[k]!==undefined&&p[k]!==null).map(([k,label])=>`<dt>${label}</dt><dd>${escapeHTML(k==='hire_date'?String(p[k]).slice(0,10):p[k])}</dd>`).join('');
+}
+</script>
+</body>
+</html>

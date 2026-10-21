@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Performance Officer | EPMS</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-roles="performance_officer">
+<main class="container"><h2 id="greeting">Welcome</h2><p class="muted">Performance Officer Dashboard</p>
+  <h3 style="margin-top:22px">Organisation overview</h3><p class="muted" style="margin:0 0 10px">Live counts from the database.</p>
+  <div id="cards" class="stat-grid"></div>
+  <h3 style="margin-top:26px">Open alerts</h3><p class="muted" style="margin:0 0 10px">Items the system flagged for your attention.</p>
+  <div id="alerts"><div class="empty">Loading…</div></div>
+</main>
+<script type="module">
+import{apiGet,escapeHTML,status,requireRole,shell,renderStats}from'./js/common.js';
+const u=await requireRole(['performance_officer']);
+if(u){
+  shell();
+  const s=await apiGet('/api/portal/summary');
+  renderStats(document.querySelector('#cards'),Object.entries(s.data.stats||{}).map(([k,v])=>({label:k.replaceAll('_',' '),value:v,note:'Open the full report.',href:'reports.html'})));
+  const a=await apiGet('/api/performance-officer/alerts');
+  document.querySelector('#alerts').innerHTML=a.alerts?.length
+    ?a.alerts.map(x=>`<div class="notice"><strong>${escapeHTML(x.alert_type)}</strong><br>${escapeHTML(x.description)}<br><span class="small muted">Severity: ${escapeHTML(x.severity)}</span></div>`).join('')
+    :'<div class="card empty">No open alerts.</div>';
+}
+</script>
+</body>
+</html>

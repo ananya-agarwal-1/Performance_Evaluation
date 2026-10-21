@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Appraisal | EPMS</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="container">
+  <div class="page-title"><div><h2>Appraisal</h2><p class="muted" id="subtitle"></p></div></div>
+  <div id="content"><p class="muted">Loading...</p></div>
+</main>
+<script type="module">
+import{apiGet,apiPost,escapeHTML,requireRole,shell}from'./js/common.js';
+
+const u=await requireRole(['employee','manager']);
+const content=document.querySelector('#content');
+const subtitle=document.querySelector('#subtitle');
+const val=v=>escapeHTML(v??'-');
+
+async function employeeView(){
+  subtitle.textContent='Your current appraisal, manager feedback and performance history.';
+  const r=await apiGet('/api/reviews/performance/my');
+  const p=r.performance,f=r.feedback;
+  content.innerHTML=`
+    <div class="stat-grid">
+      <div class="stat-card"><h3>Month</h3><div class="stat-value" style="font-size:22px">${val(p?.month)}</div></div>
+      <div class="stat-card"><h3>Performance score</h3><div class="stat-value">${val(p?.performance_score)}</div></div>
+      <div class="stat-card"><h3>Class</h3><div class="stat-value" style="font-size:22px">${val(p?.performance_class)}</div></div>
+      <div class="stat-card"><h3>Manager rating</h3><div class="stat-value">${val(p?.manager_rating)}</div></div>
+    </div>
+    <h3>Manager feedback</h3>
+    <div class="card">${f?`<p><strong>Strengths:</strong> ${val(f.strengths)}</p><p><strong>Areas to improve:</strong> ${val(f.improvement_areas)}</p><p><strong>Recommendations:</strong> ${val(f.recommendations)}</p><p><strong>Comments:</strong> ${val(f.comments)}</p>`:'<span class="muted">No manager feedback for this period yet.</span>'}</div>
+    <h3 style="margin-top:22px">Performance history</h3>
+    <div class="table-wrap"><table><thead><tr><th>Month</th><th>Tasks completed</th><th>Manager rating</th><th>Score</th><th>Class</th></tr></thead><tbody>
+      ${(r.history||[]).length?r.history.slice().reverse().map(h=>`<tr><td>${val(h.month)}</td><td>${val(h.tasks_completed)}</td><td>${val(h.manager_rating)}</td><td>${val(h.performance_score)}</td><td>${val(h.performance_class)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No history yet.</td></tr>'}
+    </tbody></table></div>
+    <p class="small muted" style="margin-top:12px">If something here looks wrong, raise it from the Appeal page.</p>`;
+}
+
+async function managerView(){
+  subtitle.textContent='Rate your team members and leave appraisal comments.';
+  const r=await apiGet('/api/reviews/manager/team');
+  content.innerHTML=`
+    <p class="muted">Review period: <strong>${val(r.period)}</strong></p>
+    <div class="table-wrap"><table><thead><tr><th>Employee</th><th>Department</th><th>Latest performance</th><th>Task score</th><th>Review</th><th></th></tr></thead><tbody>
+      ${(r.employees||[]).length?r.employees.map(e=>`<tr><td>${val(e.name)} (${val(e.employee_id)})</td><td>${val(e.department)}</td><td>${val(e.current_performance)}</td><td>${Number(e.task_score||0).toFixed(0)}%</td><td>${val(e.review_status)}</td><td><button data-id="${escapeHTML(e.employee_id)}" data-name="${escapeHTML(e.name)}">Give appraisal</button></td></tr>`).join(''):'<tr><td colspan="6" class="empty">No employees in your team.</td></tr>'}
+    </tbody></table></div>
+    <form id="review" class="section hidden">
+      <h3 id="who"></h3>
+      <input type="hidden" name="employee_id">
+      <label>Rating (0 to 100)</label><input name="manager_rating" type="number" min="0" max="100" required>
+      <label>Strengths</label><textarea name="strengths"></textarea>
+      <label>Areas to improve</label><textarea name="improvement_areas"></textarea>
+      <label>Recommendations (for example, recommend for appraisal)</label><textarea name="recommendations"></textarea>
+      <label>Comments</label><textarea name="comments"></textarea>
+      <div class="actions"><button type="submit">Save appraisal</button><button type="button" class="secondary" id="cancel">Cancel</button></div>
+      <p id="msg" class="message" role="status"></p>
+    </form>`;
+  const form=document.querySelector('#review'),msg=document.querySelector('#msg');
+  content.querySelectorAll('button[data-id]').forEach(b=>b.onclick=()=>{
+    form.reset();msg.textContent='';
+    form.employee_id.value=b.dataset.id;
+    document.querySelector('#who').textContent='Appraisal for '+b.dataset.name;
+    form.classList.remove('hidden');form.scrollIntoView();
+  });
+  document.querySelector('#cancel').onclick=()=>form.classList.add('hidden');
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const body=Object.fromEntries(new FormData(form));
+    try{await apiPost('/api/reviews/manager',body);msg.className='message success';msg.textContent='Appraisal saved.'}
+    catch(err){msg.className='message error';msg.textContent=err.message}
+  };
+}
+
+if(u){
+  shell();
+  if(u.role==='employee')await employeeView();else await managerView();
+}
+</script>
+</body>
+</html>

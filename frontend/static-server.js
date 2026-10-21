@@ -1,0 +1,4 @@
+const http=require('http'),fs=require('fs'),path=require('path');
+const root=__dirname,port=process.env.FRONTEND_PORT||5500;
+const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.json':'application/json'};
+http.createServer((req,res)=>{let u=decodeURIComponent(req.url.split('?')[0]);if(u==='/'||u==='')u='/login.html';const file=path.normalize(path.join(root,u));if(!file.startsWith(root)){res.writeHead(403);return res.end('Forbidden')}fs.readFile(file,(e,d)=>{if(e){res.writeHead(404,{'Content-Type':'text/plain'});return res.end('Not found')}res.writeHead(200,{'Content-Type':types[path.extname(file)]||'application/octet-stream'});res.end(d)})}).listen(port,()=>console.log(`EPMS frontend: http://localhost:${port}`));

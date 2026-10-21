@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Audit | EPMS</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="container">
+  <div class="page-title"><div><h2>Audit log</h2><p class="muted">Accountability records for work, reviews and appeals.</p></div></div>
+  <section class="card">
+    <h3>Where to find the records</h3>
+    <p class="muted" style="max-width:620px">Audit records are protected on the server. Use the work and appeal reports to view or export the full trail.</p>
+    <div class="actions"><a class="button" href="reports.html?type=work">Open work report</a><a class="button secondary" href="reports.html?type=appeals">Open appeal report</a></div>
+  </section>
+</main>
+<script type="module">
+import{requireRole}from'./js/common.js';
+await requireRole(['admin','performance_officer','senior_authority','sm','board_member']);
+document.querySelector('[data-logout]').onclick=()=>{localStorage.clear();location.href='login.html'};
+</script>
+</body>
+</html>

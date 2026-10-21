@@ -1,0 +1,32 @@
+EPMS FINAL - QUICK SETUP
+
+1. Create MySQL database: employee_performance_db
+2. Copy backend/.env.example to backend/.env and set your MySQL password + JWT_SECRET.
+3. From backend:
+   npm install
+   npm run import-data
+   npm run demo-users
+   npm start
+4. From frontend:
+   npm start
+5. Open http://localhost:5500
+6. Backend health: http://localhost:3000/api/health
+
+Demo logins:
+manager@test.com / manager123
+sm@test.com / sm123
+employee@test.com / employee123
+officer@test.com / officer123
+board@test.com / board123
+admin@test.com / admin123
+
+Dataset logins created by import:
+<employee_id lowercase>@epms.local / Password@123
+unless DATASET_DEFAULT_PASSWORD is changed.
+
+The import script loads:
+employee_profile_sample.csv
+monthly_performance_sample.csv
+role_mapping_reference.csv
+
+Do not open HTML through file://. Use the included frontend static server so ES modules work correctly.

@@ -1,0 +1,86 @@
+/* Simple gradient login page (login, forgot password, reset password) */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap');
+
+body.login-bg {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  font-family: 'Poppins', Arial, Helvetica, sans-serif;
+  background: linear-gradient(to right, #e8e3d8, #f6f3ec);
+}
+
+.login-box {
+  width: 100%;
+  max-width: 440px;
+  background: #fff;
+  padding: 44px 38px 40px;
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(60, 50, 30, 0.15);
+}
+
+.login-box h1 {
+  margin: 0 0 34px;
+  text-align: center;
+  font-size: 30px;
+  font-weight: 600;
+  color: #000;
+}
+.login-box h1 span { display: inline-block; padding-bottom: 2px; border-bottom: 3px solid #6b7f5e; }
+
+.login-box .sub { text-align: center; color: #666; margin: -20px 0 26px; font-size: 14px; }
+
+.login-box form { background: none; border: 0; padding: 0; }
+
+.login-box input,
+.login-box select {
+  width: 100%;
+  border: 0;
+  border-bottom: 2px solid #ddd;
+  border-radius: 0;
+  padding: 14px 0 10px;
+  margin-bottom: 22px;
+  font: inherit;
+  font-size: 17px;
+  color: #333;
+  background: transparent;
+  outline: none;
+}
+.login-box input::placeholder { color: #777; }
+.login-box input:focus,
+.login-box select:focus { border-bottom-color: #6b7f5e; }
+
+.login-box button {
+  width: 100%;
+  height: 54px;
+  margin-top: 8px;
+  border: 0;
+  border-radius: 4px;
+  color: #fff;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 500;
+  cursor: pointer;
+  background: linear-gradient(to right, #55694a, #6f8561);
+}
+.login-box button:hover { opacity: .92; }
+.login-box button:disabled { opacity: .6; cursor: not-allowed; }
+
+.login-box .msg, .login-box .message { min-height: 1.4em; margin: 12px 0 0; text-align: center; font-size: 14px; color: #555; }
+.login-box .message.error { color: #a83232; }
+.login-box .message.success { color: #2e7d32; }
+
+.login-box .links { margin-top: 18px; text-align: center; font-size: 14px; }
+.login-box .links a { color: #4a5d3f; text-decoration: none; }
+.login-box .links a:hover { text-decoration: underline; }
+.login-box .notice { margin-top: 14px; padding: 10px 12px; border-left: 4px solid #6b7f5e; background: #f1f4ec; font-size: 14px; }
+.hidden { display: none !important; }
+
+/* User / HR-Admin switch */
+.choice { display: flex; gap: 10px; margin-bottom: 22px; }
+.choice label { flex: 1; text-align: center; padding: 11px 6px; border: 1px solid #d9d4c9; border-radius: 4px; cursor: pointer; font-size: 16px; color: #444; }
+.choice input { display: none; width: auto; margin: 0; }
+.choice label:has(input:checked) { background: #55694a; border-color: #55694a; color: #fff; }
+.login-box .field-label { display: block; font-size: 13px; color: #777; margin: 0 0 -6px; }

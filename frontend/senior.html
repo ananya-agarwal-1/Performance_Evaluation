@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Senior Authority | EPMS</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-roles="senior_authority,sm">
+<main class="container"><h2 id="greeting">Welcome</h2><p class="muted">Senior Manager Dashboard</p>
+  <h3 style="margin-top:22px">Appeals</h3><p class="muted" style="margin:0 0 10px">Appeals submitted by employees that wait for a senior decision.</p>
+  <div id="cards" class="stat-grid"></div>
+  <div class="table-wrap" style="margin-top:28px"><table><thead><tr><th>Reference</th><th>Employee</th><th>Work</th><th>Status</th><th></th></tr></thead><tbody id="appeals"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div>
+
+  <section class="card chart-card"><div id="perf-chart"></div></section>
+</main>
+<script type="module">
+import{apiGet,escapeHTML,status,requireRole,shell,renderStats}from'./js/common.js';
+import{renderPerformanceChart}from'./js/chart.js';
+const u=await requireRole(['senior_authority','sm']);
+if(u){
+  shell();
+  const s=await apiGet('/api/portal/summary');
+  const st=s.data?.stats||{};
+  renderStats(document.querySelector('#cards'),[
+    {label:'Open appeals',value:st.open_appeals||0,note:'Waiting for a senior decision.',href:'appeal-detail.html?queue=senior'},
+    {label:'Work records',value:st.work||0,note:'Records you can open for context.',href:'reports.html?type=work'}
+  ]);
+  const r=await apiGet('/api/senior/appeals');
+  document.querySelector('#appeals').innerHTML=r.appeals?.length
+    ?r.appeals.map(a=>`<tr><td>${escapeHTML(a.appeal_reference)}</td><td>${escapeHTML(a.employee_name)}</td><td>${escapeHTML(a.work_title||'')}</td><td>${status(a.status)}</td><td><a class="button" href="appeal-detail.html?id=${a.id}">Open</a></td></tr>`).join('')
+    :'<tr><td colspan="5" class="empty">No escalated appeals.</td></tr>';
+  await renderPerformanceChart(document.querySelector('#perf-chart'));
+}
+</script>
+</body>
+</html>

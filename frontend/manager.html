@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Manager | EPMS</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-roles="manager">
+<main class="container"><h2 id="greeting">Welcome</h2><p class="muted">Manager Dashboard</p>
+  <h3 style="margin-top:22px">Your team at a glance</h3><p class="muted" style="margin:0 0 10px">Reviews that are waiting or overdue show up first.</p>
+  <div id="cards" class="stat-grid"></div>
+  <section class="card chart-card"><div id="perf-chart"></div></section>
+
+  <h3 style="margin-top:26px">Recent team work</h3><p class="muted" style="margin:0 0 10px">The latest records from your team.</p>
+  <div class="table-wrap"><table><thead><tr><th>Work</th><th>Employee</th><th>Status</th><th>Credits</th></tr></thead><tbody id="recent"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody></table></div>
+</main>
+<script type="module" src="js/dashboard.js"></script>
+</body>
+</html>
